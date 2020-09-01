@@ -129,6 +129,8 @@ export class ActivitybarPart extends Part implements IActivityBarService {
 
 		storageKeysSyncRegistryService.registerStorageKey({ key: ActivitybarPart.PINNED_VIEW_CONTAINERS, version: 1 });
 		storageKeysSyncRegistryService.registerStorageKey({ key: ActivitybarPart.HOME_BAR_VISIBILITY_PREFERENCE, version: 1 });
+		storageKeysSyncRegistryService.registerStorageKey({ key: ACCOUNTS_VISIBILITY_PREFERENCE_KEY, version: 1 });
+
 		this.migrateFromOldCachedViewContainersValue();
 
 		for (const cachedViewContainer of this.cachedViewContainers) {
@@ -168,13 +170,12 @@ export class ActivitybarPart extends Part implements IActivityBarService {
 
 				const toggleAccountsVisibilityAction = new Action(
 					'toggleAccountsVisibility',
-					nls.localize('accounts', "Accounts"),
+					this.accountsVisibilityPreference ? nls.localize('hideAccounts', "Hide Accounts") : nls.localize('showAccounts', "Show Accounts"),
 					undefined,
 					true,
 					async () => { this.accountsVisibilityPreference = !this.accountsVisibilityPreference; }
 				);
 
-				toggleAccountsVisibilityAction.checked = !!this.accountsActivityAction;
 				actions.push(toggleAccountsVisibilityAction);
 				actions.push(new Separator());
 
