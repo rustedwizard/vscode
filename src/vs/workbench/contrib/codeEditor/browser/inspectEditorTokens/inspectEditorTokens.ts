@@ -20,7 +20,7 @@ import { FontStyle, LanguageIdentifier, StandardTokenType, TokenMetadata, Docume
 import { IModeService } from 'vs/editor/common/services/modeService';
 import { INotificationService } from 'vs/platform/notification/common/notification';
 import { editorHoverBackground, editorHoverBorder } from 'vs/platform/theme/common/colorRegistry';
-import { HIGH_CONTRAST, registerThemingParticipant } from 'vs/platform/theme/common/themeService';
+import { registerThemingParticipant } from 'vs/platform/theme/common/themeService';
 import { findMatchingThemeRule } from 'vs/workbench/services/textMate/common/TMHelper';
 import { ITextMateService, IGrammar, IToken, StackElement } from 'vs/workbench/services/textMate/common/textMateService';
 import { IWorkbenchThemeService } from 'vs/workbench/services/themes/common/workbenchThemeService';
@@ -29,6 +29,7 @@ import { ColorThemeData, TokenStyleDefinitions, TokenStyleDefinition, TextMateTh
 import { SemanticTokenRule, TokenStyleData, TokenStyle } from 'vs/platform/theme/common/tokenClassificationRegistry';
 import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
 import { SEMANTIC_HIGHLIGHTING_SETTING_ID, IEditorSemanticHighlightingOptions } from 'vs/editor/common/services/modelServiceImpl';
+import { ColorScheme } from 'vs/platform/theme/common/theme';
 
 const $ = dom.$;
 
@@ -593,11 +594,17 @@ class InspectEditorTokensWidget extends Disposable implements IContentWidget {
 			theme.resolveScopes(definition, scopesDefinition);
 			const matchingRule = scopesDefinition[property];
 			if (matchingRule && scopesDefinition.scope) {
-				const strScopes = Array.isArray(matchingRule.scope) ? matchingRule.scope.join(', ') : String(matchingRule.scope);
+				const scopes = $('ul.tiw-metadata-values');
+				const strScopes = Array.isArray(matchingRule.scope) ? matchingRule.scope : [String(matchingRule.scope)];
+
+				for (let strScope of strScopes) {
+					scopes.appendChild($('li.tiw-metadata-value.tiw-metadata-scopes', undefined, strScope));
+				}
+
 				elements.push(
 					scopesDefinition.scope.join(' '),
-					$('br'),
-					$('code.tiw-theme-selector', undefined, strScopes, $('br'), JSON.stringify(matchingRule.settings, null, '\t')));
+					scopes,
+					$('code.tiw-theme-selector', undefined, JSON.stringify(matchingRule.settings, null, '\t')));
 				return elements;
 			}
 			return elements;
@@ -643,7 +650,7 @@ registerEditorAction(InspectEditorTokens);
 registerThemingParticipant((theme, collector) => {
 	const border = theme.getColor(editorHoverBorder);
 	if (border) {
-		let borderWidth = theme.type === HIGH_CONTRAST ? 2 : 1;
+		let borderWidth = theme.type === ColorScheme.HIGH_CONTRAST ? 2 : 1;
 		collector.addRule(`.monaco-editor .token-inspect-widget { border: ${borderWidth}px solid ${border}; }`);
 		collector.addRule(`.monaco-editor .token-inspect-widget .tiw-metadata-separator { background-color: ${border}; }`);
 	}

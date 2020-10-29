@@ -30,7 +30,6 @@ import { TerminalQuickAccessProvider } from 'vs/workbench/contrib/terminal/brows
 import { ToggleViewAction } from 'vs/workbench/browser/actions/layoutActions';
 import { IViewsService, IViewDescriptorService } from 'vs/workbench/common/views';
 import { IContextKeyService, ContextKeyExpr } from 'vs/platform/contextkey/common/contextkey';
-import { addClass } from 'vs/base/browser/dom';
 import { selectBorder } from 'vs/platform/theme/common/colorRegistry';
 import { KeyMod, KeyCode } from 'vs/base/common/keyCodes';
 import { KeybindingWeight } from 'vs/platform/keybinding/common/keybindingsRegistry';
@@ -39,6 +38,7 @@ import { CONTEXT_ACCESSIBILITY_MODE_ENABLED } from 'vs/platform/accessibility/co
 import { IOpenerService } from 'vs/platform/opener/common/opener';
 import { ITerminalContributionService } from 'vs/workbench/contrib/terminal/common/terminalExtensionPoints';
 import { SelectActionViewItem } from 'vs/base/browser/ui/actionbar/actionViewItems';
+import { FindInFilesCommand, IFindInFilesArgs } from 'vs/workbench/contrib/search/browser/searchActions';
 
 async function getCwdForSplit(configHelper: ITerminalConfigHelper, instance: ITerminalInstance, folders?: IWorkspaceFolder[], commandService?: ICommandService): Promise<string | URI | undefined> {
 	switch (configHelper.config.splitCwd) {
@@ -78,22 +78,8 @@ export class ToggleTerminalAction extends ToggleViewAction {
 		@IViewDescriptorService viewDescriptorService: IViewDescriptorService,
 		@IContextKeyService contextKeyService: IContextKeyService,
 		@IWorkbenchLayoutService layoutService: IWorkbenchLayoutService,
-		@ITerminalService private readonly terminalService: ITerminalService
 	) {
 		super(id, label, TERMINAL_VIEW_ID, viewsService, viewDescriptorService, contextKeyService, layoutService);
-	}
-
-	async run() {
-		if (this.terminalService.isProcessSupportRegistered && this.terminalService.terminalInstances.length === 0) {
-			// If there is not yet an instance attempt to create it here so that we can suggest a
-			// new shell on Windows (and not do so when the panel is restored on reload).
-			const newTerminalInstance = this.terminalService.createTerminal(undefined);
-			const toDispose = newTerminalInstance.onProcessIdReady(() => {
-				newTerminalInstance.focus();
-				toDispose.dispose();
-			});
-		}
-		return super.run();
 	}
 }
 
@@ -374,7 +360,7 @@ export class SwitchTerminalActionViewItem extends SelectActionViewItem {
 
 	render(container: HTMLElement): void {
 		super.render(container);
-		addClass(container, 'switch-terminal');
+		container.classList.add('switch-terminal');
 		this._register(attachStylerCallback(this._themeService, { selectBorder }, colors => {
 			container.style.borderColor = colors.selectBorder ? `${colors.selectBorder}` : '';
 		}));
@@ -651,7 +637,7 @@ export function registerTerminalActions() {
 			const codeEditorService = accessor.get(ICodeEditorService);
 
 			const instance = terminalService.getActiveOrCreateInstance();
-			let editor = codeEditorService.getFocusedCodeEditor();
+			let editor = codeEditorService.getActiveCodeEditor();
 			if (!editor || !editor.hasModel()) {
 				return;
 			}
@@ -691,7 +677,7 @@ export function registerTerminalActions() {
 			}
 
 			const uri = editor.getModel().uri;
-			if (uri.scheme !== 'file') {
+			if (uri.scheme !== Schemas.file) {
 				notificationService.warn(localize('workbench.action.terminal.runActiveFile.noFile', 'Only files on disk can be run in the terminal'));
 				return;
 			}
@@ -1348,6 +1334,28 @@ export function registerTerminalActions() {
 		}
 		run(accessor: ServicesAccessor) {
 			accessor.get(ITerminalService).findPrevious();
+		}
+	});
+	registerAction2(class extends Action2 {
+		constructor() {
+			super({
+				id: TERMINAL_COMMAND_ID.SEARCH_WORKSPACE,
+				title: { value: localize('workbench.action.terminal.searchWorkspace', "Search Workspace"), original: 'Search Workspace' },
+				f1: true,
+				category,
+				keybinding: [
+					{
+						primary: KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.KEY_F,
+						when: ContextKeyExpr.and(KEYBINDING_CONTEXT_TERMINAL_PROCESS_SUPPORTED, KEYBINDING_CONTEXT_TERMINAL_FOCUS, KEYBINDING_CONTEXT_TERMINAL_TEXT_SELECTED),
+						weight: KeybindingWeight.WorkbenchContrib
+					}
+				],
+				precondition: KEYBINDING_CONTEXT_TERMINAL_PROCESS_SUPPORTED
+			});
+		}
+		run(accessor: ServicesAccessor) {
+			const query = accessor.get(ITerminalService).getActiveInstance()?.selection;
+			FindInFilesCommand(accessor, { query } as IFindInFilesArgs);
 		}
 	});
 	registerAction2(class extends Action2 {

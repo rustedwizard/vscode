@@ -6,8 +6,6 @@
 export const file = 'file';
 export const untitled = 'untitled';
 export const git = 'git';
-export const privateScheme = 'private';
-
 /** Live share scheme */
 export const vsls = 'vsls';
 export const walkThroughSnippet = 'walkThroughSnippet';
@@ -15,6 +13,7 @@ export const walkThroughSnippet = 'walkThroughSnippet';
 export const semanticSupportedSchemes = [
 	file,
 	untitled,
+	walkThroughSnippet,
 ];
 
 /**
@@ -22,6 +21,5 @@ export const semanticSupportedSchemes = [
  */
 export const disabledSchemes = new Set([
 	git,
-	vsls,
-	privateScheme,
+	vsls
 ]);

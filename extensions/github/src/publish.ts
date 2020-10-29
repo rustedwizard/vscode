@@ -32,6 +32,9 @@ export async function publishRepository(gitAPI: GitAPI, repository?: Repository)
 
 	if (repository) {
 		folder = repository.rootUri;
+	} else if (gitAPI.repositories.length === 1) {
+		repository = gitAPI.repositories[0];
+		folder = repository.rootUri;
 	} else if (vscode.workspace.workspaceFolders.length === 1) {
 		folder = vscode.workspace.workspaceFolders[0].uri;
 	} else {
@@ -123,7 +126,10 @@ export async function publishRepository(gitAPI: GitAPI, repository?: Repository)
 			try {
 				quickpick.busy = true;
 
-				const children = (await vscode.workspace.fs.readDirectory(folder)).map(([name]) => name);
+				const children = (await vscode.workspace.fs.readDirectory(folder))
+					.map(([name]) => name)
+					.filter(name => name !== '.git');
+
 				quickpick.items = children.map(name => ({ label: name }));
 				quickpick.selectedItems = quickpick.items;
 				quickpick.busy = false;
@@ -174,8 +180,9 @@ export async function publishRepository(gitAPI: GitAPI, repository?: Repository)
 		}
 
 		progress.report({ message: 'Uploading files', increment: 25 });
+		const branch = await repository.getBranch('HEAD');
 		await repository.addRemote('origin', createdGithubRepository.clone_url);
-		await repository.push('origin', 'master', true);
+		await repository.push('origin', branch.name, true);
 
 		return createdGithubRepository;
 	});

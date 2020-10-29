@@ -673,6 +673,20 @@ export default class TypeScriptServiceClient extends Disposable implements IType
 		return this.toPath(document.uri) || undefined;
 	}
 
+	public hasCapabilityForResource(resource: vscode.Uri, capability: ClientCapability): boolean {
+		switch (capability) {
+			case ClientCapability.Semantic:
+				{
+					return fileSchemes.semanticSupportedSchemes.includes(resource.scheme);
+				}
+			case ClientCapability.Syntax:
+			case ClientCapability.EnhancedSyntax:
+				{
+					return true;
+				}
+		}
+	}
+
 	public toResource(filepath: string): vscode.Uri {
 		if (filepath.startsWith(this.inMemoryResourcePrefix)) {
 			const resource = vscode.Uri.parse(filepath.slice(1));
@@ -831,6 +845,8 @@ export default class TypeScriptServiceClient extends Disposable implements IType
 					break;
 				}
 			case EventName.projectsUpdatedInBackground:
+				this.loadingIndicator.reset();
+
 				const body = (event as Proto.ProjectsUpdatedInBackgroundEvent).body;
 				const resources = body.openFiles.map(file => this.toResource(file));
 				this.bufferSyncSupport.getErr(resources);
@@ -1008,7 +1024,7 @@ class ServerInitializingIndicator extends Disposable {
 		vscode.window.withProgress({
 			location: vscode.ProgressLocation.Window,
 			title: localize('serverLoading.progress', "Initializing JS/TS language features"),
-		}, () => new Promise((resolve, reject) => {
+		}, () => new Promise<void>((resolve, reject) => {
 			this._task = { project: projectName, resolve, reject };
 		}));
 	}

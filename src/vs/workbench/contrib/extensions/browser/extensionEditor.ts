@@ -14,20 +14,20 @@ import { Action, IAction } from 'vs/base/common/actions';
 import { isPromiseCanceledError } from 'vs/base/common/errors';
 import { dispose, toDisposable, Disposable, DisposableStore, IDisposable } from 'vs/base/common/lifecycle';
 import { domEvent } from 'vs/base/browser/event';
-import { append, $, addClass, removeClass, finalHandler, join, toggleClass, hide, show, addDisposableListener, EventType } from 'vs/base/browser/dom';
+import { append, $, finalHandler, join, hide, show, addDisposableListener, EventType } from 'vs/base/browser/dom';
 import { EditorPane } from 'vs/workbench/browser/parts/editor/editorPane';
 import { IViewletService } from 'vs/workbench/services/viewlet/browser/viewlet';
 import { ITelemetryService } from 'vs/platform/telemetry/common/telemetry';
 import { IInstantiationService, ServicesAccessor } from 'vs/platform/instantiation/common/instantiation';
-import { IExtensionRecommendationsService } from 'vs/workbench/services/extensionManagement/common/extensionManagement';
-import { IExtensionManifest, IKeyBinding, IView, IViewContainer, ExtensionType } from 'vs/platform/extensions/common/extensions';
+import { IExtensionIgnoredRecommendationsService, IExtensionRecommendationsService } from 'vs/workbench/services/extensionRecommendations/common/extensionRecommendations';
+import { IExtensionManifest, IKeyBinding, IView, IViewContainer } from 'vs/platform/extensions/common/extensions';
 import { ResolvedKeybinding, KeyMod, KeyCode } from 'vs/base/common/keyCodes';
 import { ExtensionsInput } from 'vs/workbench/contrib/extensions/common/extensionsInput';
 import { IExtensionsWorkbenchService, IExtensionsViewPaneContainer, VIEWLET_ID, IExtension, ExtensionContainers } from 'vs/workbench/contrib/extensions/common/extensions';
 import { RatingsWidget, InstallCountWidget, RemoteBadgeWidget } from 'vs/workbench/contrib/extensions/browser/extensionsWidgets';
 import { EditorOptions, IEditorOpenContext } from 'vs/workbench/common/editor';
 import { ActionBar } from 'vs/base/browser/ui/actionbar/actionbar';
-import { CombinedInstallAction, UpdateAction, ExtensionEditorDropDownAction, ReloadAction, MaliciousStatusLabelAction, IgnoreExtensionRecommendationAction, UndoIgnoreExtensionRecommendationAction, EnableDropDownAction, DisableDropDownAction, StatusLabelAction, SetFileIconThemeAction, SetColorThemeAction, RemoteInstallAction, ExtensionToolTipAction, SystemDisabledWarningAction, LocalInstallAction, SyncIgnoredIconAction, SetProductIconThemeAction } from 'vs/workbench/contrib/extensions/browser/extensionsActions';
+import { UpdateAction, ReloadAction, MaliciousStatusLabelAction, IgnoreExtensionRecommendationAction, UndoIgnoreExtensionRecommendationAction, EnableDropDownAction, DisableDropDownAction, StatusLabelAction, SetFileIconThemeAction, SetColorThemeAction, RemoteInstallAction, ExtensionToolTipAction, SystemDisabledWarningAction, LocalInstallAction, SyncIgnoredIconAction, SetProductIconThemeAction, ActionWithDropDownAction, InstallDropdownAction, InstallingLabelAction, UninstallAction, ExtensionActionWithDropdownActionViewItem } from 'vs/workbench/contrib/extensions/browser/extensionsActions';
 import { IKeybindingService } from 'vs/platform/keybinding/common/keybinding';
 import { DomScrollableElement } from 'vs/base/browser/ui/scrollbar/scrollableElement';
 import { IOpenerService, matchesScheme } from 'vs/platform/opener/common/opener';
@@ -37,7 +37,6 @@ import { ContextKeyExpr } from 'vs/platform/contextkey/common/contextkey';
 import { IEditorService } from 'vs/workbench/services/editor/common/editorService';
 import { KeybindingWeight } from 'vs/platform/keybinding/common/keybindingsRegistry';
 import { Color } from 'vs/base/common/color';
-import { assign } from 'vs/base/common/objects';
 import { INotificationService } from 'vs/platform/notification/common/notification';
 import { CancellationToken } from 'vs/base/common/cancellation';
 import { ExtensionsTree, ExtensionData, ExtensionsGridView, getExtensions } from 'vs/workbench/contrib/extensions/browser/extensionsViewer';
@@ -60,6 +59,7 @@ import { TokenizationRegistry } from 'vs/editor/common/modes';
 import { generateTokensCSSForColorMap } from 'vs/editor/common/modes/supports/tokenization';
 import { editorBackground } from 'vs/platform/theme/common/colorRegistry';
 import { registerAction2, Action2 } from 'vs/platform/actions/common/actions';
+import { IContextMenuService } from 'vs/platform/contextview/browser/contextView';
 
 function removeEmbeddedSVGs(documentContent: string): string {
 	const newDocument = new DOMParser().parseFromString(documentContent, 'text/html');
@@ -190,11 +190,13 @@ export class ExtensionEditor extends EditorPane {
 		@INotificationService private readonly notificationService: INotificationService,
 		@IOpenerService private readonly openerService: IOpenerService,
 		@IExtensionRecommendationsService private readonly extensionRecommendationsService: IExtensionRecommendationsService,
+		@IExtensionIgnoredRecommendationsService private readonly extensionIgnoredRecommendationsService: IExtensionIgnoredRecommendationsService,
 		@IStorageService storageService: IStorageService,
 		@IExtensionService private readonly extensionService: IExtensionService,
 		@IWorkbenchThemeService private readonly workbenchThemeService: IWorkbenchThemeService,
 		@IWebviewService private readonly webviewService: IWebviewService,
 		@IModeService private readonly modeService: IModeService,
+		@IContextMenuService private readonly contextMenuService: IContextMenuService,
 	) {
 		super(ExtensionEditor.ID, telemetryService, themeService, storageService);
 		this.extensionReadme = null;
@@ -249,8 +251,8 @@ export class ExtensionEditor extends EditorPane {
 		const extensionActionBar = this._register(new ActionBar(extensionActions, {
 			animated: false,
 			actionViewItemProvider: (action: IAction) => {
-				if (action instanceof ExtensionEditorDropDownAction) {
-					return action.createActionViewItem();
+				if (action instanceof ActionWithDropDownAction) {
+					return new ExtensionActionWithDropdownActionViewItem(action, { icon: true, label: true, menuActionsOrProvider: { getActions: () => action.menuActions }, menuActionClassNames: (action.class || '').split(' ') }, this.contextMenuService);
 				}
 				return undefined;
 			}
@@ -341,7 +343,7 @@ export class ExtensionEditor extends EditorPane {
 		template.name.textContent = extension.displayName;
 		template.identifier.textContent = extension.identifier.id;
 		template.preview.style.display = extension.preview ? 'inherit' : 'none';
-		template.builtin.style.display = extension.type === ExtensionType.System ? 'inherit' : 'none';
+		template.builtin.style.display = extension.isBuiltin ? 'inherit' : 'none';
 
 		template.publisher.textContent = extension.publisherDisplayName;
 		template.version.textContent = `v${extension.version}`;
@@ -361,11 +363,11 @@ export class ExtensionEditor extends EditorPane {
 			]
 		}
 		*/
-		this.telemetryService.publicLog('extensionGallery:openExtension', assign(extension.telemetryData, recommendationsData));
+		this.telemetryService.publicLog('extensionGallery:openExtension', { ...extension.telemetryData, ...recommendationsData });
 
-		toggleClass(template.name, 'clickable', !!extension.url);
-		toggleClass(template.publisher, 'clickable', !!extension.url);
-		toggleClass(template.rating, 'clickable', !!extension.url);
+		template.name.classList.toggle('clickable', !!extension.url);
+		template.publisher.classList.toggle('clickable', !!extension.url);
+		template.rating.classList.toggle('clickable', !!extension.url);
 		if (extension.url) {
 			this.transientDisposables.add(this.onClick(template.name, () => this.openerService.open(URI.parse(extension.url!))));
 			this.transientDisposables.add(this.onClick(template.rating, () => this.openerService.open(URI.parse(`${extension.url}#review-details`))));
@@ -399,7 +401,7 @@ export class ExtensionEditor extends EditorPane {
 			this.instantiationService.createInstance(RatingsWidget, template.rating, false)
 		];
 		const reloadAction = this.instantiationService.createInstance(ReloadAction);
-		const combinedInstallAction = this.instantiationService.createInstance(CombinedInstallAction);
+		const combinedInstallAction = this.instantiationService.createInstance(InstallDropdownAction);
 		const systemDisabledWarningAction = this.instantiationService.createInstance(SystemDisabledWarningAction);
 		const actions = [
 			reloadAction,
@@ -415,6 +417,8 @@ export class ExtensionEditor extends EditorPane {
 			this.instantiationService.createInstance(RemoteInstallAction, false),
 			this.instantiationService.createInstance(LocalInstallAction),
 			combinedInstallAction,
+			this.instantiationService.createInstance(InstallingLabelAction),
+			this.instantiationService.createInstance(UninstallAction),
 			systemDisabledWarningAction,
 			this.instantiationService.createInstance(ExtensionToolTipAction, systemDisabledWarningAction, reloadAction),
 			this.instantiationService.createInstance(MaliciousStatusLabelAction, true),
@@ -472,36 +476,27 @@ export class ExtensionEditor extends EditorPane {
 		this.transientDisposables.add(ignoreAction);
 		this.transientDisposables.add(undoIgnoreAction);
 
-		const extRecommendations = this.extensionRecommendationsService.getAllRecommendationsWithReason();
-		if (extRecommendations[extension.identifier.id.toLowerCase()]) {
-			ignoreAction.enabled = true;
-			template.subtext.textContent = extRecommendations[extension.identifier.id.toLowerCase()].reasonText;
-			show(template.subtextContainer);
-		} else if (this.extensionRecommendationsService.getIgnoredRecommendations().indexOf(extension.identifier.id.toLowerCase()) !== -1) {
-			undoIgnoreAction.enabled = true;
-			template.subtext.textContent = localize('recommendationHasBeenIgnored', "You have chosen not to receive recommendations for this extension.");
-			show(template.subtextContainer);
-		}
-		else {
-			template.subtext.textContent = '';
-		}
-
-		this.extensionRecommendationsService.onRecommendationChange(change => {
-			if (change.extensionId.toLowerCase() === extension.identifier.id.toLowerCase()) {
-				if (change.isRecommended) {
-					undoIgnoreAction.enabled = false;
-					const extRecommendations = this.extensionRecommendationsService.getAllRecommendationsWithReason();
-					if (extRecommendations[extension.identifier.id.toLowerCase()]) {
-						ignoreAction.enabled = true;
-						template.subtext.textContent = extRecommendations[extension.identifier.id.toLowerCase()].reasonText;
-					}
-				} else {
-					undoIgnoreAction.enabled = true;
-					ignoreAction.enabled = false;
-					template.subtext.textContent = localize('recommendationHasBeenIgnored', "You have chosen not to receive recommendations for this extension.");
-				}
+		const updateRecommendationFn = () => {
+			const extRecommendations = this.extensionRecommendationsService.getAllRecommendationsWithReason();
+			if (extRecommendations[extension.identifier.id.toLowerCase()]) {
+				ignoreAction.enabled = true;
+				undoIgnoreAction.enabled = false;
+				template.subtext.textContent = extRecommendations[extension.identifier.id.toLowerCase()].reasonText;
+				show(template.subtextContainer);
+			} else if (this.extensionIgnoredRecommendationsService.globalIgnoredRecommendations.indexOf(extension.identifier.id.toLowerCase()) !== -1) {
+				ignoreAction.enabled = false;
+				undoIgnoreAction.enabled = true;
+				template.subtext.textContent = localize('recommendationHasBeenIgnored', "You have chosen not to receive recommendations for this extension.");
+				show(template.subtextContainer);
+			} else {
+				ignoreAction.enabled = false;
+				undoIgnoreAction.enabled = false;
+				template.subtext.textContent = '';
+				hide(template.subtextContainer);
 			}
-		});
+		};
+		updateRecommendationFn();
+		this.transientDisposables.add(this.extensionRecommendationsService.onDidChangeRecommendations(() => updateRecommendationFn()));
 
 		this.transientDisposables.add(reloadAction.onDidChange(e => {
 			if (e.tooltip) {
@@ -556,7 +551,7 @@ export class ExtensionEditor extends EditorPane {
 					]
 				}
 			*/
-			this.telemetryService.publicLog('extensionEditor:navbarChange', assign(extension.telemetryData, { navItem: id }));
+			this.telemetryService.publicLog('extensionEditor:navbarChange', { ...extension.telemetryData, navItem: id });
 		}
 
 		this.contentDisposables.clear();
@@ -848,13 +843,13 @@ export class ExtensionEditor extends EditorPane {
 
 		const extensionPack = append(extensionPackReadme, $('div', { class: 'extension-pack' }));
 		if (manifest.extensionPack!.length <= 3) {
-			addClass(extensionPackReadme, 'one-row');
+			extensionPackReadme.classList.add('one-row');
 		} else if (manifest.extensionPack!.length <= 6) {
-			addClass(extensionPackReadme, 'two-rows');
+			extensionPackReadme.classList.add('two-rows');
 		} else if (manifest.extensionPack!.length <= 9) {
-			addClass(extensionPackReadme, 'three-rows');
+			extensionPackReadme.classList.add('three-rows');
 		} else {
-			addClass(extensionPackReadme, 'more-rows');
+			extensionPackReadme.classList.add('more-rows');
 		}
 
 		const extensionPackHeader = append(extensionPack, $('div.header'));
@@ -1437,10 +1432,10 @@ export class ExtensionEditor extends EditorPane {
 	}
 
 	private loadContents<T>(loadingTask: () => CacheResult<T>, template: IExtensionEditorTemplate): Promise<T> {
-		addClass(template.content, 'loading');
+		template.content.classList.add('loading');
 
 		const result = this.contentDisposables.add(loadingTask());
-		const onDone = () => removeClass(template.content, 'loading');
+		const onDone = () => template.content.classList.remove('loading');
 		result.promise.then(onDone, onDone);
 
 		return result.promise;

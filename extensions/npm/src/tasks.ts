@@ -107,8 +107,8 @@ export function isWorkspaceFolder(value: any): value is WorkspaceFolder {
 	return value && typeof value !== 'number';
 }
 
-export function getPackageManager(folder: WorkspaceFolder): string {
-	return workspace.getConfiguration('npm', folder.uri).get<string>('packageManager', 'npm');
+export function getPackageManager(folder: Uri): string {
+	return workspace.getConfiguration('npm', folder).get<string>('packageManager', 'npm');
 }
 
 export async function hasNpmScripts(): Promise<boolean> {
@@ -277,7 +277,7 @@ export function createTask(script: NpmTaskDefinition | string, cmd: string, fold
 	}
 
 	function getCommandLine(folder: WorkspaceFolder, cmd: string): string {
-		let packageManager = getPackageManager(folder);
+		let packageManager = getPackageManager(folder.uri);
 		if (workspace.getConfiguration('npm', folder.uri).get<boolean>('runSilent')) {
 			return `${packageManager} --silent ${cmd}`;
 		}
@@ -357,12 +357,13 @@ export function runScript(script: string, document: TextDocument) {
 	}
 }
 
-export function startDebugging(scriptName: string, folder: WorkspaceFolder) {
+export function startDebugging(scriptName: string, cwd: string, folder: WorkspaceFolder) {
 	const config: DebugConfiguration = {
 		type: 'pwa-node',
 		request: 'launch',
 		name: `Debug ${scriptName}`,
-		runtimeExecutable: getPackageManager(folder),
+		cwd,
+		runtimeExecutable: getPackageManager(folder.uri),
 		runtimeArgs: [
 			'run',
 			scriptName,

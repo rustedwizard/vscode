@@ -79,7 +79,16 @@ if (crashReporterDirectory) {
 			submitURL = submitURL.concat('&uid=', crashReporterId, '&iid=', crashReporterId, '&sid=', crashReporterId);
 			// Send the id for child node process that are explicitly starting crash reporter.
 			// For vscode this is ExtensionHost process currently.
-			process.argv.push('--crash-reporter-id', crashReporterId);
+			const argv = process.argv;
+			const endOfArgsMarkerIndex = argv.indexOf('--');
+			if (endOfArgsMarkerIndex === -1) {
+				argv.push('--crash-reporter-id', crashReporterId);
+			} else {
+				// if the we have an argument "--" (end of argument marker)
+				// we cannot add arguments at the end. rather, we add
+				// arguments before the "--" marker.
+				argv.splice(endOfArgsMarkerIndex, 0, '--crash-reporter-id', crashReporterId);
+			}
 		}
 	}
 }
@@ -131,12 +140,6 @@ registerListeners();
 
 // Cached data
 const nodeCachedDataDir = getNodeCachedDir();
-
-// Remove env set by snap https://github.com/microsoft/vscode/issues/85344
-if (process.env['SNAP']) {
-	delete process.env['GDK_PIXBUF_MODULE_FILE'];
-	delete process.env['GDK_PIXBUF_MODULEDIR'];
-}
 
 /**
  * Support user defined locale: load it early before app('ready')
@@ -200,9 +203,9 @@ async function onReady() {
 }
 
 /**
- * @typedef	 {{ [arg: string]: any; '--'?: string[]; _: string[]; }} ParsedArgs
+ * @typedef	 {{ [arg: string]: any; '--'?: string[]; _: string[]; }} NativeParsedArgs
  *
- * @param {ParsedArgs} cliArgs
+ * @param {NativeParsedArgs} cliArgs
  */
 function configureCommandlineSwitchesSync(cliArgs) {
 	const SUPPORTED_ELECTRON_SWITCHES = [
@@ -294,7 +297,7 @@ function readArgvConfigSync() {
 	// Fallback to default
 	if (!argvConfig) {
 		argvConfig = {
-			'disable-color-correct-rendering': true // Force pre-Chrome-60 color profile handling (for https://github.com/Microsoft/vscode/issues/51791)
+			'disable-color-correct-rendering': true // Force pre-Chrome-60 color profile handling (for https://github.com/microsoft/vscode/issues/51791)
 		};
 	}
 
@@ -328,7 +331,7 @@ function createDefaultArgvConfigSync(argvConfigPath) {
 			'	// "disable-hardware-acceleration": true,',
 			'',
 			'	// Enabled by default by VS Code to resolve color issues in the renderer',
-			'	// See https://github.com/Microsoft/vscode/issues/51791 for details',
+			'	// See https://github.com/microsoft/vscode/issues/51791 for details',
 			'	"disable-color-correct-rendering": true',
 			'}'
 		];
@@ -355,7 +358,7 @@ function getArgvConfigPath() {
 }
 
 /**
- * @param {ParsedArgs} cliArgs
+ * @param {NativeParsedArgs} cliArgs
  * @returns {string}
  */
 function getJSFlags(cliArgs) {
@@ -375,7 +378,7 @@ function getJSFlags(cliArgs) {
 }
 
 /**
- * @param {ParsedArgs} cliArgs
+ * @param {NativeParsedArgs} cliArgs
  *
  * @returns {string}
  */
@@ -388,7 +391,7 @@ function getUserDataPath(cliArgs) {
 }
 
 /**
- * @returns {ParsedArgs}
+ * @returns {NativeParsedArgs}
  */
 function parseCLIArgs() {
 	const minimist = require('minimist');

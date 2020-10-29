@@ -11,12 +11,12 @@ import { join } from 'vs/base/common/path';
 import { tmpdir } from 'os';
 import { mkdirp, rimraf, RimRafMode } from 'vs/base/node/pfs';
 import { NullLogService } from 'vs/platform/log/common/log';
-import { EnvironmentService } from 'vs/platform/environment/node/environmentService';
+import { NativeEnvironmentService } from 'vs/platform/environment/node/environmentService';
 import { parseArgs, OPTIONS } from 'vs/platform/environment/node/argv';
 import { InMemoryStorageDatabase } from 'vs/base/parts/storage/common/storage';
 import { URI } from 'vs/base/common/uri';
 
-suite('StorageService', () => {
+suite('StorageService', function () {
 
 	test('Remove Data (global, in-memory)', () => {
 		removeData(StorageScope.GLOBAL);
@@ -84,10 +84,16 @@ suite('StorageService', () => {
 	}
 
 	test('Migrate Data', async () => {
-		class StorageTestEnvironmentService extends EnvironmentService {
+
+		// Given issues such as https://github.com/microsoft/vscode/issues/108113
+		// we see random test failures when accessing the native file system.
+		this.retries(3);
+		this.timeout(1000 * 20);
+
+		class StorageTestEnvironmentService extends NativeEnvironmentService {
 
 			constructor(private workspaceStorageFolderPath: URI, private _extensionsPath: string) {
-				super(parseArgs(process.argv, OPTIONS), process.execPath);
+				super(parseArgs(process.argv, OPTIONS));
 			}
 
 			get workspaceStorageHome(): URI {

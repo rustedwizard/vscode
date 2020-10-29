@@ -428,11 +428,13 @@ export interface IResourceNavigatorOptions {
 
 export interface SelectionKeyboardEvent extends KeyboardEvent {
 	preserveFocus?: boolean;
+	__forceEvent?: boolean;
 }
 
 export function getSelectionKeyboardEvent(typeArg = 'keydown', preserveFocus?: boolean): SelectionKeyboardEvent {
 	const e = new KeyboardEvent(typeArg);
 	(<SelectionKeyboardEvent>e).preserveFocus = preserveFocus;
+	(<SelectionKeyboardEvent>e).__forceEvent = true;
 
 	return e;
 }
@@ -452,7 +454,6 @@ abstract class ResourceNavigator<T> extends Disposable {
 		super();
 
 		this.openOnFocus = options?.openOnFocus ?? false;
-		this.openOnSingleClick = options?.openOnSingleClick ?? true;
 
 		this._register(Event.filter(this.widget.onDidChangeSelection, e => e.browserEvent instanceof KeyboardEvent)(e => this.onSelectionFromKeyboard(e)));
 		this._register(this.widget.onPointer((e: { browserEvent: MouseEvent }) => this.onPointer(e.browserEvent)));
@@ -463,9 +464,12 @@ abstract class ResourceNavigator<T> extends Disposable {
 		}
 
 		if (typeof options?.openOnSingleClick !== 'boolean' && options?.configurationService) {
+			this.openOnSingleClick = options?.configurationService!.getValue(openModeSettingKey) !== 'doubleClick';
 			this._register(options?.configurationService.onDidChangeConfiguration(() => {
 				this.openOnSingleClick = options?.configurationService!.getValue(openModeSettingKey) !== 'doubleClick';
 			}));
+		} else {
+			this.openOnSingleClick = options?.openOnSingleClick ?? true;
 		}
 	}
 
@@ -493,15 +497,19 @@ abstract class ResourceNavigator<T> extends Disposable {
 	}
 
 	private onPointer(browserEvent: MouseEvent): void {
+		if (!this.openOnSingleClick) {
+			return;
+		}
+
 		const isDoubleClick = browserEvent.detail === 2;
 
-		if (!this.openOnSingleClick && !isDoubleClick) {
+		if (isDoubleClick) {
 			return;
 		}
 
 		const isMiddleClick = browserEvent.button === 1;
-		const preserveFocus = !isDoubleClick;
-		const pinned = isDoubleClick || isMiddleClick;
+		const preserveFocus = true;
+		const pinned = isMiddleClick;
 		const sideBySide = browserEvent.ctrlKey || browserEvent.metaKey || browserEvent.altKey;
 
 		this._open(preserveFocus, pinned, sideBySide, browserEvent);
