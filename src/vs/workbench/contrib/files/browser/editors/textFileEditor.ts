@@ -27,7 +27,7 @@ import { ScrollType } from 'vs/editor/common/editorCommon';
 import { IEditorService } from 'vs/workbench/services/editor/common/editorService';
 import { IEditorGroupsService } from 'vs/workbench/services/editor/common/editorGroupsService';
 import { CancellationToken } from 'vs/base/common/cancellation';
-import { createErrorWithActions } from 'vs/base/common/errorsWithActions';
+import { createErrorWithActions } from 'vs/base/common/errors';
 import { EditorActivation, IEditorOptions } from 'vs/platform/editor/common/editor';
 import { IUriIdentityService } from 'vs/workbench/services/uriIdentity/common/uriIdentity';
 import { IExplorerService } from 'vs/workbench/contrib/files/browser/files';
@@ -88,7 +88,7 @@ export class TextFileEditor extends BaseTextEditor {
 		}
 	}
 
-	protected onWillCloseEditorInGroup(editor: IEditorInput): void {
+	protected override onWillCloseEditorInGroup(editor: IEditorInput): void {
 
 		// React to editors closing to preserve or clear view state. This needs to happen
 		// in the onWillCloseEditor because at that time the editor has not yet
@@ -96,15 +96,15 @@ export class TextFileEditor extends BaseTextEditor {
 		this.doSaveOrClearTextEditorViewState(editor);
 	}
 
-	getTitle(): string {
+	override getTitle(): string {
 		return this.input ? this.input.getName() : localize('textFileEditor', "Text File Editor");
 	}
 
-	get input(): FileEditorInput | undefined {
+	override get input(): FileEditorInput | undefined {
 		return this._input as FileEditorInput;
 	}
 
-	async setInput(input: FileEditorInput, options: EditorOptions | undefined, context: IEditorOpenContext, token: CancellationToken): Promise<void> {
+	async override setInput(input: FileEditorInput, options: EditorOptions | undefined, context: IEditorOpenContext, token: CancellationToken): Promise<void> {
 
 		// Update/clear view settings if input changes
 		this.doSaveOrClearTextEditorViewState(this.input);
@@ -229,7 +229,7 @@ export class TextFileEditor extends BaseTextEditor {
 		}
 	}
 
-	clearInput(): void {
+	override clearInput(): void {
 
 		// Update/clear editor view state in settings
 		this.doSaveOrClearTextEditorViewState(this.input);
@@ -244,7 +244,7 @@ export class TextFileEditor extends BaseTextEditor {
 		super.clearInput();
 	}
 
-	protected saveState(): void {
+	protected override saveState(): void {
 
 		// Update/clear editor view State
 		this.doSaveOrClearTextEditorViewState(this.input);

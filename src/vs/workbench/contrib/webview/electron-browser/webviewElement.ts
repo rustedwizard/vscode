@@ -10,12 +10,15 @@ import { Emitter, Event } from 'vs/base/common/event';
 import { once } from 'vs/base/common/functional';
 import { IDisposable } from 'vs/base/common/lifecycle';
 import { FileAccess, Schemas } from 'vs/base/common/network';
-import { URI } from 'vs/base/common/uri';
 import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
+import { IFileService } from 'vs/platform/files/common/files';
 import { IInstantiationService } from 'vs/platform/instantiation/common/instantiation';
-import { IMainProcessService } from 'vs/platform/ipc/electron-sandbox/mainProcessService';
+import { IMainProcessService } from 'vs/platform/ipc/electron-sandbox/services';
 import { ILogService } from 'vs/platform/log/common/log';
 import { INotificationService } from 'vs/platform/notification/common/notification';
+import { IRemoteAuthorityResolverService } from 'vs/platform/remote/common/remoteAuthorityResolver';
+import { ITunnelService } from 'vs/platform/remote/common/tunnel';
+import { IRequestService } from 'vs/platform/request/common/request';
 import { ITelemetryService } from 'vs/platform/telemetry/common/telemetry';
 import { webviewPartitionId } from 'vs/platform/webview/common/resourceLoader';
 import { BaseWebview, WebviewMessageChannels } from 'vs/workbench/contrib/webview/browser/baseWebviewElement';
@@ -23,7 +26,7 @@ import { WebviewThemeDataProvider } from 'vs/workbench/contrib/webview/browser/t
 import { Webview, WebviewContentOptions, WebviewExtensionDescription, WebviewOptions } from 'vs/workbench/contrib/webview/browser/webview';
 import { WebviewFindDelegate, WebviewFindWidget } from 'vs/workbench/contrib/webview/browser/webviewFindWidget';
 import { WebviewIgnoreMenuShortcutsManager } from 'vs/workbench/contrib/webview/electron-browser/webviewIgnoreMenuShortcutsManager';
-import { rewriteVsCodeResourceUrls, WebviewResourceRequestManager } from 'vs/workbench/contrib/webview/electron-sandbox/resourceLoading';
+import { rewriteVsCodeResourceUrls } from 'vs/workbench/contrib/webview/electron-sandbox/resourceLoading';
 import { IWorkbenchEnvironmentService } from 'vs/workbench/services/environment/common/environmentService';
 
 export class ElectronWebviewBasedWebview extends BaseWebview<WebviewTag> implements Webview, WebviewFindDelegate {
@@ -43,9 +46,6 @@ export class ElectronWebviewBasedWebview extends BaseWebview<WebviewTag> impleme
 	private _webviewFindWidget: WebviewFindWidget | undefined;
 	private _findStarted: boolean = false;
 
-	private readonly _resourceRequestManager: WebviewResourceRequestManager;
-	private _messagePromise = Promise.resolve();
-
 	private readonly _focusDelayer = this._register(new ThrottledDelayer(10));
 	private _elementFocusImpl!: (options?: FocusOptions | undefined) => void;
 
@@ -62,8 +62,21 @@ export class ElectronWebviewBasedWebview extends BaseWebview<WebviewTag> impleme
 		@IConfigurationService configurationService: IConfigurationService,
 		@IMainProcessService mainProcessService: IMainProcessService,
 		@INotificationService notificationService: INotificationService,
+		@IFileService fileService: IFileService,
+		@IRequestService requestService: IRequestService,
+		@ITunnelService tunnelService: ITunnelService,
+		@IRemoteAuthorityResolverService remoteAuthorityResolverService: IRemoteAuthorityResolverService,
 	) {
-		super(id, options, contentOptions, extension, _webviewThemeDataProvider, notificationService, _myLogService, telemetryService, environmentService);
+		super(id, options, contentOptions, extension, _webviewThemeDataProvider, {
+			notificationService,
+			logService: _myLogService,
+			telemetryService,
+			environmentService,
+			fileService,
+			requestService,
+			tunnelService,
+			remoteAuthorityResolverService
+		});
 
 		/* __GDPR__
 			"webview.createWebview" : {
@@ -79,8 +92,6 @@ export class ElectronWebviewBasedWebview extends BaseWebview<WebviewTag> impleme
 		});
 
 		this._myLogService.debug(`Webview(${this.id}): init`);
-
-		this._resourceRequestManager = this._register(instantiationService.createInstance(WebviewResourceRequestManager, id, extension, this.content.options));
 
 		this._register(addDisposableListener(this.element!, 'dom-ready', once(() => {
 			this._register(ElectronWebviewBasedWebview.getWebviewKeyboardHandler(configurationService, mainProcessService).add(this.element!));
@@ -150,7 +161,7 @@ export class ElectronWebviewBasedWebview extends BaseWebview<WebviewTag> impleme
 		// and not the `vscode-file` URI because preload scripts are loaded
 		// via node.js from the main side and only allow `file:` protocol
 		this.element!.preload = FileAccess.asFileUri('./pre/electron-index.js', require).toString(true);
-		this.element!.src = `${Schemas.vscodeWebview}://${this.id}/electron-browser/index.html?platform=electron`;
+		this.element!.src = `${Schemas.vscodeWebview}://${this.id}/electron-browser-index.html?platform=electron&id=${this.id}&vscode-resource-origin=${encodeURIComponent(this.webviewResourceEndpoint)}`;
 	}
 
 	protected createElement(options: WebviewOptions) {
@@ -175,23 +186,18 @@ export class ElectronWebviewBasedWebview extends BaseWebview<WebviewTag> impleme
 		return element;
 	}
 
-	public set contentOptions(options: WebviewContentOptions) {
+	public override set contentOptions(options: WebviewContentOptions) {
 		this._myLogService.debug(`Webview(${this.id}): will set content options`);
-		this._resourceRequestManager.update(options);
 		super.contentOptions = options;
 	}
 
-	public set localResourcesRoot(resources: URI[]) {
-		this._resourceRequestManager.update({
-			...this.contentOptions,
-			localResourceRoots: resources,
-		});
-		super.localResourcesRoot = resources;
+	private get webviewResourceEndpoint(): string {
+		return `https://${this.id}.vscode-webview-test.com`;
 	}
 
 	protected readonly extraContentOptions = {};
 
-	public set html(value: string) {
+	public override  set html(value: string) {
 		this._myLogService.debug(`Webview(${this.id}): will set html`);
 
 		super.html = rewriteVsCodeResourceUrls(this.id, value);
@@ -209,14 +215,8 @@ export class ElectronWebviewBasedWebview extends BaseWebview<WebviewTag> impleme
 	}
 
 	protected async doPostMessage(channel: string, data?: any): Promise<void> {
-		this._myLogService.debug(`Webview(${this.id}): will post message on '${channel}'`);
-
-		this._messagePromise = this._messagePromise
-			.then(() => this._resourceRequestManager.ensureReady())
-			.then(() => {
-				this._myLogService.debug(`Webview(${this.id}): did post message on '${channel}'`);
-				return this.element?.send(channel, data);
-			});
+		this._myLogService.debug(`Webview(${this.id}): did post message on '${channel}'`);
+		this.element?.send(channel, data);
 	}
 
 	public focus(): void {
@@ -266,7 +266,7 @@ export class ElectronWebviewBasedWebview extends BaseWebview<WebviewTag> impleme
 		});
 	}
 
-	protected style(): void {
+	protected override style(): void {
 		super.style();
 		this.styledFindWidget();
 	}
@@ -289,7 +289,7 @@ export class ElectronWebviewBasedWebview extends BaseWebview<WebviewTag> impleme
 		// FindNext must be false for a first request
 		const findOptions: FindInPageOptions = {
 			forward: options.forward,
-			findNext: false,
+			findNext: true,
 			matchCase: options.matchCase,
 			medialCapitalAsWordStart: options.medialCapitalAsWordStart
 		};
@@ -315,7 +315,7 @@ export class ElectronWebviewBasedWebview extends BaseWebview<WebviewTag> impleme
 			return;
 		}
 
-		const options = { findNext: true, forward: !previous };
+		const options = { findNext: false, forward: !previous };
 		if (!this._findStarted) {
 			this.startFind(value, options);
 			return;
@@ -345,31 +345,31 @@ export class ElectronWebviewBasedWebview extends BaseWebview<WebviewTag> impleme
 		this._webviewFindWidget?.find(previous);
 	}
 
-	public selectAll() {
+	public override selectAll() {
 		this.element?.selectAll();
 	}
 
-	public copy() {
+	public override copy() {
 		this.element?.copy();
 	}
 
-	public paste() {
+	public override paste() {
 		this.element?.paste();
 	}
 
-	public cut() {
+	public override cut() {
 		this.element?.cut();
 	}
 
-	public undo() {
+	public override undo() {
 		this.element?.undo();
 	}
 
-	public redo() {
+	public override redo() {
 		this.element?.redo();
 	}
 
-	protected on<T = unknown>(channel: WebviewMessageChannels | string, handler: (data: T) => void): IDisposable {
+	protected override on<T = unknown>(channel: WebviewMessageChannels | string, handler: (data: T) => void): IDisposable {
 		if (!this.element) {
 			throw new Error('Cannot add event listener. No webview element found.');
 		}

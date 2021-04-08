@@ -53,6 +53,8 @@ import { ILogService } from 'vs/platform/log/common/log';
 import { IUriIdentityService } from 'vs/workbench/services/uriIdentity/common/uriIdentity';
 import { ResourceFileEdit } from 'vs/editor/browser/services/bulkEditService';
 import { IExplorerService } from 'vs/workbench/contrib/files/browser/files';
+import { listenStream } from 'vs/base/common/stream';
+import { EditorOverride } from 'vs/platform/editor/common/editor';
 
 export const NEW_FILE_COMMAND_ID = 'explorer.newFile';
 export const NEW_FILE_LABEL = nls.localize('newFile', "New File");
@@ -392,7 +394,7 @@ export function incrementFileName(name: string, isFolder: boolean, incrementalNa
 
 	// file => file1
 	// file1 => file2
-	let noExtensionRegex = RegExp('(.*)(\d*)$');
+	let noExtensionRegex = RegExp('(.*)(\\d*)$');
 	if (!isFolder && lastIndexOfDot === -1 && name.match(noExtensionRegex)) {
 		return name.replace(noExtensionRegex, (match, g1?, g2?) => {
 			let number = parseInt(g2);
@@ -446,7 +448,7 @@ export class GlobalCompareResourcesAction extends Action {
 		super(id, label);
 	}
 
-	async run(): Promise<void> {
+	async override run(): Promise<void> {
 		const activeInput = this.editorService.activeEditor;
 		const activeResource = EditorResourceAccessor.getOriginalUri(activeInput);
 		if (activeResource && this.textModelService.canHandleResource(activeResource)) {
@@ -465,7 +467,7 @@ export class GlobalCompareResourcesAction extends Action {
 							override: this.editorService.openEditor({
 								leftResource: activeResource,
 								rightResource: resource,
-								options: { override: false, pinned: true }
+								options: { override: EditorOverride.DISABLED, pinned: true }
 							})
 						};
 					}
@@ -475,7 +477,7 @@ export class GlobalCompareResourcesAction extends Action {
 					return {
 						override: this.editorService.openEditor({
 							resource: activeResource,
-							options: { override: false, pinned: true }
+							options: { override: EditorOverride.DISABLED, pinned: true }
 						})
 					};
 				}
@@ -506,7 +508,7 @@ export class ToggleAutoSaveAction extends Action {
 		super(id, label);
 	}
 
-	run(): Promise<void> {
+	override run(): Promise<void> {
 		return this.filesConfigurationService.toggleAutoSave();
 	}
 }
@@ -545,7 +547,7 @@ export abstract class BaseSaveAllAction extends Action {
 		}
 	}
 
-	async run(context?: unknown): Promise<void> {
+	async override run(context?: unknown): Promise<void> {
 		try {
 			await this.doRun(context);
 		} catch (error) {
@@ -559,7 +561,7 @@ export class SaveAllInGroupAction extends BaseSaveAllAction {
 	static readonly ID = 'workbench.files.action.saveAllInGroup';
 	static readonly LABEL = nls.localize('saveAllInGroup', "Save All in Group");
 
-	get class(): string {
+	override get class(): string {
 		return 'explorer-action ' + Codicon.saveAll.classNames;
 	}
 
@@ -577,7 +579,7 @@ export class CloseGroupAction extends Action {
 		super(id, label, Codicon.closeAll.classNames);
 	}
 
-	run(context?: unknown): Promise<void> {
+	override run(context?: unknown): Promise<void> {
 		return this.commandService.executeCommand(CLOSE_EDITORS_AND_GROUP_COMMAND_ID, {}, context);
 	}
 }
@@ -595,7 +597,7 @@ export class FocusFilesExplorer extends Action {
 		super(id, label);
 	}
 
-	async run(): Promise<void> {
+	async override run(): Promise<void> {
 		await this.viewletService.openViewlet(VIEWLET_ID, true);
 	}
 }
@@ -615,7 +617,7 @@ export class ShowActiveFileInExplorer extends Action {
 		super(id, label);
 	}
 
-	async run(): Promise<void> {
+	async override run(): Promise<void> {
 		const resource = EditorResourceAccessor.getOriginalUri(this.editorService.activeEditor, { supportSideBySide: SideBySideEditor.PRIMARY });
 		if (resource) {
 			this.commandService.executeCommand(REVEAL_IN_EXPLORER_COMMAND_ID, resource);
@@ -641,7 +643,7 @@ export class ShowOpenedFileInNewWindow extends Action {
 		super(id, label);
 	}
 
-	async run(): Promise<void> {
+	async override run(): Promise<void> {
 		const fileResource = EditorResourceAccessor.getOriginalUri(this.editorService.activeEditor, { supportSideBySide: SideBySideEditor.PRIMARY });
 		if (fileResource) {
 			if (this.fileService.canHandleResource(fileResource)) {
@@ -753,7 +755,7 @@ export class CompareWithClipboardAction extends Action {
 		this.enabled = true;
 	}
 
-	async run(): Promise<void> {
+	async override run(): Promise<void> {
 		const resource = EditorResourceAccessor.getOriginalUri(this.editorService.activeEditor, { supportSideBySide: SideBySideEditor.PRIMARY });
 		const scheme = `clipboardCompare${CompareWithClipboardAction.SCHEME_COUNTER++}`;
 		if (resource && (this.fileService.canHandleResource(resource) || resource.scheme === Schemas.untitled)) {
@@ -776,7 +778,7 @@ export class CompareWithClipboardAction extends Action {
 		}
 	}
 
-	dispose(): void {
+	override dispose(): void {
 		super.dispose();
 
 		dispose(this.registrationDisposal);
@@ -1034,21 +1036,21 @@ const downloadFileHandler = async (accessor: ServicesAccessor) => {
 								reject();
 							}));
 
-							sourceStream.on('data', data => {
-								if (!disposed) {
-									target.write(data.buffer);
-									reportProgress(contents.name, contents.size, data.byteLength, operation);
+							listenStream(sourceStream, {
+								onData: data => {
+									if (!disposed) {
+										target.write(data.buffer);
+										reportProgress(contents.name, contents.size, data.byteLength, operation);
+									}
+								},
+								onError: error => {
+									disposables.dispose();
+									reject(error);
+								},
+								onEnd: () => {
+									disposables.dispose();
+									resolve();
 								}
-							});
-
-							sourceStream.on('error', error => {
-								disposables.dispose();
-								reject(error);
-							});
-
-							sourceStream.on('end', () => {
-								disposables.dispose();
-								resolve();
 							});
 						});
 					}
@@ -1209,7 +1211,6 @@ export const pasteFileHandler = async (accessor: ServicesAccessor) => {
 	const explorerService = accessor.get(IExplorerService);
 	const fileService = accessor.get(IFileService);
 	const notificationService = accessor.get(INotificationService);
-	const editorService = accessor.get(IEditorService);
 	const configurationService = accessor.get(IConfigurationService);
 	const uriIdentityService = accessor.get(IUriIdentityService);
 
@@ -1264,12 +1265,6 @@ export const pasteFileHandler = async (accessor: ServicesAccessor) => {
 
 			const pair = sourceTargetPairs[0];
 			await explorerService.select(pair.target);
-			if (sourceTargetPairs.length === 1) {
-				const item = explorerService.findClosest(pair.target);
-				if (item && !item.isDirectory) {
-					await editorService.openEditor({ resource: item.resource, options: { pinned: true, preserveFocus: true } });
-				}
-			}
 		}
 	} catch (e) {
 		onError(notificationService, new Error(nls.localize('fileDeleted', "The file(s) to paste have been deleted or moved since you copied them. {0}", getErrorMessage(e))));

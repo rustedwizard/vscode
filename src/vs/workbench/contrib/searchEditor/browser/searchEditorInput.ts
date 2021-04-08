@@ -3,12 +3,12 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import 'vs/css!./media/searchEditor';
 import { Registry } from 'vs/platform/registry/common/platform';
 import { Emitter, Event } from 'vs/base/common/event';
 import { basename } from 'vs/base/common/path';
 import { extname, isEqual, joinPath } from 'vs/base/common/resources';
 import { URI } from 'vs/base/common/uri';
-import 'vs/css!./media/searchEditor';
 import { Range } from 'vs/editor/common/core/range';
 import { ITextModel, TrackedRangeStickiness } from 'vs/editor/common/model';
 import { IModelService } from 'vs/editor/common/services/modelService';
@@ -23,7 +23,6 @@ import { Memento } from 'vs/workbench/common/memento';
 import { SearchEditorFindMatchClass, SearchEditorScheme } from 'vs/workbench/contrib/searchEditor/browser/constants';
 import { SearchEditorModel } from 'vs/workbench/contrib/searchEditor/browser/searchEditorModel';
 import { defaultSearchConfig, extractSearchQueryFromModel, parseSavedSearchEditor, serializeSearchConfiguration } from 'vs/workbench/contrib/searchEditor/browser/searchEditorSerialization';
-import { AutoSaveMode, IFilesConfigurationService } from 'vs/workbench/services/filesConfiguration/common/filesConfigurationService';
 import { IPathService } from 'vs/workbench/services/path/common/pathService';
 import { ISearchConfigurationProperties } from 'vs/workbench/services/search/common/search';
 import { ITextFileSaveOptions, ITextFileService, stringToSnapshot } from 'vs/workbench/services/textfile/common/textfiles';
@@ -85,7 +84,6 @@ export class SearchEditorInput extends EditorInput {
 		@IFileDialogService private readonly fileDialogService: IFileDialogService,
 		@IInstantiationService private readonly instantiationService: IInstantiationService,
 		@IWorkingCopyService private readonly workingCopyService: IWorkingCopyService,
-		@IFilesConfigurationService private readonly filesConfigurationService: IFilesConfigurationService,
 		@ITelemetryService private readonly telemetryService: ITelemetryService,
 		@IPathService private readonly pathService: IPathService,
 		@IStorageService storageService: IStorageService,
@@ -123,7 +121,7 @@ export class SearchEditorInput extends EditorInput {
 		this._register(this.workingCopyService.registerWorkingCopy(workingCopyAdapter));
 	}
 
-	async save(group: GroupIdentifier, options?: ITextFileSaveOptions): Promise<IEditorInput | undefined> {
+	async override save(group: GroupIdentifier, options?: ITextFileSaveOptions): Promise<IEditorInput | undefined> {
 		if ((await this.model).isDisposed()) { return; }
 
 		if (this.backingUri) {
@@ -143,7 +141,7 @@ export class SearchEditorInput extends EditorInput {
 		return { config: this.config, body: await this.model };
 	}
 
-	async saveAs(group: GroupIdentifier, options?: ITextFileSaveOptions): Promise<IEditorInput | undefined> {
+	async override saveAs(group: GroupIdentifier, options?: ITextFileSaveOptions): Promise<IEditorInput | undefined> {
 		const path = await this.fileDialogService.pickFileToSave(await this.suggestFileName(), options?.availableFileSystems);
 		if (path) {
 			this.telemetryService.publicLog2('searchEditor/saveSearchResults');
@@ -165,7 +163,7 @@ export class SearchEditorInput extends EditorInput {
 		return SearchEditorInput.ID;
 	}
 
-	getName(maxLength = 12): string {
+	override getName(maxLength = 12): string {
 		const trimToMax = (label: string) => (label.length < maxLength ? label : `${label.slice(0, maxLength - 3)}...`);
 
 		if (this.backingUri) {
@@ -185,35 +183,19 @@ export class SearchEditorInput extends EditorInput {
 		this._onDidChangeDirty.fire();
 	}
 
-	isDirty() {
+	override isDirty() {
 		return this.dirty;
 	}
 
-	isSaving(): boolean {
-		if (!this.isDirty()) {
-			return false; // the editor needs to be dirty for being saved
-		}
-
-		if (this.isUntitled()) {
-			return false; // untitled are not saving automatically
-		}
-
-		if (this.filesConfigurationService.getAutoSaveMode() === AutoSaveMode.AFTER_SHORT_DELAY) {
-			return true; // a short auto save is configured, treat this as being saved
-		}
-
+	override isReadonly() {
 		return false;
 	}
 
-	isReadonly() {
-		return false;
-	}
-
-	isUntitled() {
+	override isUntitled() {
 		return !this.backingUri;
 	}
 
-	rename(group: GroupIdentifier, target: URI): IMoveResult | undefined {
+	override rename(group: GroupIdentifier, target: URI): IMoveResult | undefined {
 		if (this._cachedModel && extname(target) === SEARCH_EDITOR_EXT) {
 			return {
 				editor: this.instantiationService.invokeFunction(getOrMakeSearchEditorInput, { config: this.config, text: this._cachedModel.getValue(), backingUri: target })
@@ -223,12 +205,12 @@ export class SearchEditorInput extends EditorInput {
 		return undefined;
 	}
 
-	dispose() {
+	override dispose() {
 		this.modelService.destroyModel(this.modelUri);
 		super.dispose();
 	}
 
-	matches(other: unknown) {
+	override matches(other: unknown) {
 		if (this === other) { return true; }
 
 		if (other instanceof SearchEditorInput) {
@@ -251,7 +233,12 @@ export class SearchEditorInput extends EditorInput {
 			({ range, options: { className: SearchEditorFindMatchClass, stickiness: TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } })));
 	}
 
-	async revert(group: GroupIdentifier, options?: IRevertOptions) {
+	async override revert(group: GroupIdentifier, options?: IRevertOptions) {
+		if (options?.soft) {
+			this.setDirty(false);
+			return;
+		}
+
 		if (this.backingUri) {
 			const { config, text } = await this.instantiationService.invokeFunction(parseSavedSearchEditor, this.backingUri);
 			(await this.model).setValue(text);
@@ -263,7 +250,7 @@ export class SearchEditorInput extends EditorInput {
 		this.setDirty(false);
 	}
 
-	supportsSplitEditor() {
+	override supportsSplitEditor() {
 		return false;
 	}
 
@@ -324,7 +311,7 @@ export const getOrMakeSearchEditorInput = (
 	const input = instantiationService.createInstance(SearchEditorInput, modelUri, existingData.backingUri, model);
 
 	inputs.set(cacheKey, input);
-	input.onDispose(() => inputs.delete(cacheKey));
+	input.onWillDispose(() => inputs.delete(cacheKey));
 
 	return input;
 };

@@ -26,6 +26,7 @@ import { IRange } from 'vs/editor/common/core/range';
 import { CursorChangeReason, ICursorPositionChangedEvent } from 'vs/editor/common/controller/cursorEvents';
 import { ModelDecorationOptions } from 'vs/editor/common/model/textModel';
 import { TrackedRangeStickiness, IModelDecorationsChangeAccessor } from 'vs/editor/common/model';
+import { EditorOption } from 'vs/editor/common/config/editorOptions';
 
 export interface IRangeHighlightDecoration {
 	resource: URI;
@@ -47,7 +48,7 @@ export class RangeHighlightDecorations extends Disposable {
 	}
 
 	removeHighlightRange() {
-		if (this.editor && this.editor.getModel() && this.rangeHighlightDecorationId) {
+		if (this.editor?.getModel() && this.rangeHighlightDecorationId) {
 			this.editor.deltaDecorations([this.rangeHighlightDecorationId], []);
 			this._onHighlightRemoved.fire();
 		}
@@ -76,7 +77,7 @@ export class RangeHighlightDecorations extends Disposable {
 
 	private getEditor(resourceRange: IRangeHighlightDecoration): ICodeEditor | undefined {
 		const activeEditor = this.editorService.activeEditor;
-		const resource = activeEditor && activeEditor.resource;
+		const resource = activeEditor?.resource;
 		if (resource && isEqual(resource, resourceRange.resource)) {
 			return this.editorService.activeTextEditorControl as ICodeEditor;
 		}
@@ -121,10 +122,10 @@ export class RangeHighlightDecorations extends Disposable {
 		return (isWholeLine ? RangeHighlightDecorations._WHOLE_LINE_RANGE_HIGHLIGHT : RangeHighlightDecorations._RANGE_HIGHLIGHT);
 	}
 
-	dispose() {
+	override dispose() {
 		super.dispose();
 
-		if (this.editor && this.editor.getModel()) {
+		if (this.editor?.getModel()) {
 			this.removeHighlightRange();
 			this.editor = null;
 		}
@@ -200,7 +201,7 @@ export class FloatingClickWidget extends Widget implements IOverlayWidget {
 		this.editor.addOverlayWidget(this);
 	}
 
-	dispose(): void {
+	override dispose(): void {
 		this.editor.removeOverlayWidget(this);
 
 		super.dispose();
@@ -264,6 +265,11 @@ export class OpenWorkspaceButtonContribution extends Disposable implements IEdit
 			}
 		}
 
+		if (editor.getOption(EditorOption.inDiffEditor)) {
+			// in diff editor
+			return false;
+		}
+
 		return true;
 	}
 
@@ -286,7 +292,7 @@ export class OpenWorkspaceButtonContribution extends Disposable implements IEdit
 		this.openWorkspaceButton = undefined;
 	}
 
-	dispose(): void {
+	override dispose(): void {
 		this.disposeOpenWorkspaceWidgetRenderer();
 
 		super.dispose();

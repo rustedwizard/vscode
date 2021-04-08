@@ -19,7 +19,7 @@ import { IColorTheme, IThemeService, registerThemingParticipant } from 'vs/platf
 import { ActivityAction, ActivityActionViewItem, ICompositeBar, ICompositeBarColors, ToggleCompositePinnedAction } from 'vs/workbench/browser/parts/compositeBarActions';
 import { CATEGORIES } from 'vs/workbench/common/actions';
 import { IActivity } from 'vs/workbench/common/activity';
-import { ACTIVITY_BAR_FOREGROUND, ACTIVITY_BAR_ACTIVE_BORDER, ACTIVITY_BAR_ACTIVE_FOCUS_BORDER, ACTIVITY_BAR_ACTIVE_BACKGROUND, ACTIVITY_BAR_BACKGROUND } from 'vs/workbench/common/theme';
+import { ACTIVITY_BAR_FOREGROUND, ACTIVITY_BAR_ACTIVE_BORDER, ACTIVITY_BAR_ACTIVE_FOCUS_BORDER, ACTIVITY_BAR_ACTIVE_BACKGROUND } from 'vs/workbench/common/theme';
 import { IActivityBarService } from 'vs/workbench/services/activityBar/browser/activityBarService';
 import { IWorkbenchLayoutService, Parts } from 'vs/workbench/services/layout/browser/layoutService';
 import { IViewletService } from 'vs/workbench/services/viewlet/browser/viewlet';
@@ -56,7 +56,7 @@ export class ViewContainerActivityAction extends ActivityAction {
 		this.activity = activity;
 	}
 
-	async run(event: unknown): Promise<void> {
+	async override run(event: unknown): Promise<void> {
 		if (event instanceof MouseEvent && event.button === 2) {
 			return; // do not run on right click
 		}
@@ -118,10 +118,10 @@ class MenuActivityActionViewItem extends ActivityActionViewItem {
 		@IConfigurationService protected readonly configurationService: IConfigurationService,
 		@IWorkbenchEnvironmentService protected readonly environmentService: IWorkbenchEnvironmentService
 	) {
-		super(action, { draggable: false, colors, icon: true }, themeService);
+		super(action, { draggable: false, colors, icon: true, hasPopup: true }, themeService);
 	}
 
-	render(container: HTMLElement): void {
+	override render(container: HTMLElement): void {
 		super.render(container);
 
 		// Context menus are triggered on mouse down so that an item can be picked
@@ -182,54 +182,6 @@ class MenuActivityActionViewItem extends ActivityActionViewItem {
 	}
 }
 
-export class HomeActivityActionViewItem extends MenuActivityActionViewItem {
-
-	static readonly HOME_BAR_VISIBILITY_PREFERENCE = 'workbench.activity.showHomeIndicator';
-
-	constructor(
-		private readonly goHomeHref: string,
-		action: ActivityAction,
-		contextMenuActionsProvider: () => IAction[],
-		colors: (theme: IColorTheme) => ICompositeBarColors,
-		@IThemeService themeService: IThemeService,
-		@IMenuService menuService: IMenuService,
-		@IContextMenuService contextMenuService: IContextMenuService,
-		@IContextKeyService contextKeyService: IContextKeyService,
-		@IConfigurationService configurationService: IConfigurationService,
-		@IWorkbenchEnvironmentService environmentService: IWorkbenchEnvironmentService,
-		@IStorageService private readonly storageService: IStorageService
-	) {
-		super(MenuId.MenubarHomeMenu, action, contextMenuActionsProvider, colors, themeService, menuService, contextMenuService, contextKeyService, configurationService, environmentService);
-	}
-
-	protected async resolveMainMenuActions(homeMenu: IMenu, disposables: DisposableStore): Promise<IAction[]> {
-		const actions = [];
-
-		// Go Home
-		actions.push(toAction({ id: 'goHome', label: localize('goHome', "Go Home"), run: () => window.location.href = this.goHomeHref }));
-
-		// Contributed
-		const contributedActions = await super.resolveMainMenuActions(homeMenu, disposables);
-		if (contributedActions.length) {
-			actions.push(disposables.add(new Separator()));
-			actions.push(...contributedActions);
-		}
-
-		return actions;
-	}
-
-	protected async resolveContextMenuActions(disposables: DisposableStore): Promise<IAction[]> {
-		const actions = await super.resolveContextMenuActions(disposables);
-
-		actions.unshift(...[
-			toAction({ id: 'hideHomeButton', label: localize('hideHomeButton', "Hide Home Button"), run: () => this.storageService.store(HomeActivityActionViewItem.HOME_BAR_VISIBILITY_PREFERENCE, false, StorageScope.GLOBAL, StorageTarget.USER) }),
-			new Separator()
-		]);
-
-		return actions;
-	}
-}
-
 export class AccountsActivityActionViewItem extends MenuActivityActionViewItem {
 
 	static readonly ACCOUNTS_VISIBILITY_PREFERENCE_KEY = 'workbench.activity.showAccounts';
@@ -251,7 +203,7 @@ export class AccountsActivityActionViewItem extends MenuActivityActionViewItem {
 		super(MenuId.AccountsContext, action, contextMenuActionsProvider, colors, themeService, menuService, contextMenuService, contextKeyService, configurationService, environmentService);
 	}
 
-	protected async resolveMainMenuActions(accountsMenu: IMenu, disposables: DisposableStore): Promise<IAction[]> {
+	protected async override resolveMainMenuActions(accountsMenu: IMenu, disposables: DisposableStore): Promise<IAction[]> {
 		await super.resolveMainMenuActions(accountsMenu, disposables);
 
 		const otherCommands = accountsMenu.getActions();
@@ -288,7 +240,7 @@ export class AccountsActivityActionViewItem extends MenuActivityActionViewItem {
 					}));
 
 					const signOutAction = disposables.add(new Action('signOut', localize('signOut', "Sign Out"), '', true, () => {
-						return this.authenticationService.signOutOfAccount(sessionInfo.providerId, accountName);
+						return this.authenticationService.removeAccountSessions(sessionInfo.providerId, accountName, sessionInfo.sessions[accountName]);
 					}));
 
 					const providerSubMenuActions = [manageExtensionsAction];
@@ -307,6 +259,11 @@ export class AccountsActivityActionViewItem extends MenuActivityActionViewItem {
 			}
 		});
 
+		if (providers.length && !menus.length) {
+			const noAccountsAvailableAction = disposables.add(new Action('noAccountsAvailable', localize('noAccounts', "You are not signed in to any accounts"), undefined, false));
+			menus.push(noAccountsAvailableAction);
+		}
+
 		if (menus.length && otherCommands.length) {
 			menus.push(disposables.add(new Separator()));
 		}
@@ -322,7 +279,7 @@ export class AccountsActivityActionViewItem extends MenuActivityActionViewItem {
 		return menus;
 	}
 
-	protected async resolveContextMenuActions(disposables: DisposableStore): Promise<IAction[]> {
+	protected async override resolveContextMenuActions(disposables: DisposableStore): Promise<IAction[]> {
 		const actions = await super.resolveContextMenuActions(disposables);
 
 		actions.unshift(...[
@@ -422,15 +379,6 @@ registerAction2(
 );
 
 registerThemingParticipant((theme, collector) => {
-	const activityBarBackgroundColor = theme.getColor(ACTIVITY_BAR_BACKGROUND);
-	if (activityBarBackgroundColor) {
-		collector.addRule(`
-			.monaco-workbench .activitybar > .content > .home-bar > .home-bar-icon-badge {
-				background-color: ${activityBarBackgroundColor};
-			}
-		`);
-	}
-
 	const activityBarForegroundColor = theme.getColor(ACTIVITY_BAR_FOREGROUND);
 	if (activityBarForegroundColor) {
 		collector.addRule(`
@@ -439,7 +387,6 @@ registerThemingParticipant((theme, collector) => {
 			.monaco-workbench .activitybar > .content :not(.monaco-menu) > .monaco-action-bar .action-item:hover .action-label:not(.codicon) {
 				background-color: ${activityBarForegroundColor} !important;
 			}
-			.monaco-workbench .activitybar > .content .home-bar > .monaco-action-bar .action-item .action-label.codicon,
 			.monaco-workbench .activitybar > .content :not(.monaco-menu) > .monaco-action-bar .action-item.active .action-label.codicon,
 			.monaco-workbench .activitybar > .content :not(.monaco-menu) > .monaco-action-bar .action-item:focus .action-label.codicon,
 			.monaco-workbench .activitybar > .content :not(.monaco-menu) > .monaco-action-bar .action-item:hover .action-label.codicon {
@@ -506,7 +453,7 @@ registerThemingParticipant((theme, collector) => {
 				outline: 1px dashed;
 			}
 
-			.monaco-workbench .activitybar > .content :not(.monaco-menu) > .monaco-action-bar .action-item:focus:before {
+			.monaco-workbench .activitybar > .content :not(.monaco-menu) > .monaco-action-bar .action-item:focus .active-item-indicator:before {
 				border-left-color: ${outline};
 			}
 
@@ -525,7 +472,7 @@ registerThemingParticipant((theme, collector) => {
 		const focusBorderColor = theme.getColor(focusBorder);
 		if (focusBorderColor) {
 			collector.addRule(`
-					.monaco-workbench .activitybar > .content :not(.monaco-menu) > .monaco-action-bar .action-item:focus:before {
+				.monaco-workbench .activitybar > .content :not(.monaco-menu) > .monaco-action-bar .action-item:focus .active-item-indicator:before {
 						border-left-color: ${focusBorderColor};
 					}
 				`);

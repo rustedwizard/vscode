@@ -49,9 +49,9 @@ export class NativeWorkspaceEditingService extends AbstractWorkspaceEditingServi
 		@IFileService fileService: IFileService,
 		@ITextFileService textFileService: ITextFileService,
 		@IWorkspacesService workspacesService: IWorkspacesService,
-		@INativeWorkbenchEnvironmentService protected environmentService: INativeWorkbenchEnvironmentService,
+		@INativeWorkbenchEnvironmentService environmentService: INativeWorkbenchEnvironmentService,
 		@IFileDialogService fileDialogService: IFileDialogService,
-		@IDialogService protected dialogService: IDialogService,
+		@IDialogService dialogService: IDialogService,
 		@ILifecycleService private readonly lifecycleService: ILifecycleService,
 		@ILabelService private readonly labelService: ILabelService,
 		@IHostService hostService: IHostService,
@@ -65,9 +65,7 @@ export class NativeWorkspaceEditingService extends AbstractWorkspaceEditingServi
 	private registerListeners(): void {
 		this.lifecycleService.onBeforeShutdown(e => {
 			const saveOperation = this.saveUntitledBeforeShutdown(e.reason);
-			if (saveOperation) {
-				e.veto(saveOperation, 'veto.untitledWorkspace');
-			}
+			e.veto(saveOperation, 'veto.untitledWorkspace');
 		});
 	}
 
@@ -126,7 +124,8 @@ export class NativeWorkspaceEditingService extends AbstractWorkspaceEditingServi
 					const newWorkspaceIdentifier = await this.workspacesService.getWorkspaceIdentifier(newWorkspacePath);
 					await this.workspacesService.addRecentlyOpened([{
 						label: this.labelService.getWorkspaceLabel(newWorkspaceIdentifier, { verbose: true }),
-						workspace: newWorkspaceIdentifier
+						workspace: newWorkspaceIdentifier,
+						remoteAuthority: this.environmentService.remoteAuthority
 					}]);
 
 					// Delete the untitled one
@@ -140,7 +139,7 @@ export class NativeWorkspaceEditingService extends AbstractWorkspaceEditingServi
 		}
 	}
 
-	async isValidTargetWorkspacePath(path: URI): Promise<boolean> {
+	async override isValidTargetWorkspacePath(path: URI): Promise<boolean> {
 		const windows = await this.nativeHostService.getWindows();
 
 		// Prevent overwriting a workspace that is currently opened in another window

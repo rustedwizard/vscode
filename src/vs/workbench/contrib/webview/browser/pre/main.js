@@ -11,9 +11,9 @@
  *   focusIframeOnCreate?: boolean,
  *   ready?: Promise<void>,
  *   onIframeLoaded?: (iframe: HTMLIFrameElement) => void,
- *   fakeLoad?: boolean,
  *   rewriteCSP: (existingCSP: string, endpoint?: string) => string,
- *   onElectron?: boolean
+ *   onElectron?: boolean,
+ *   useParentPostMessage: boolean,
  * }} WebviewHost
  */
 
@@ -56,6 +56,8 @@
 	const getPendingFrame = () => {
 		return /** @type {HTMLIFrameElement} */ (document.getElementById('pending-frame'));
 	};
+
+	const vscodePostMessageFuncName = '__vscode_post_message__';
 
 	const defaultCssRules = `
 	html {
@@ -141,15 +143,22 @@
 
 	/**
 	 * @param {boolean} allowMultipleAPIAcquire
+	 * @param {boolean} useParentPostMessage
 	 * @param {*} [state]
 	 * @return {string}
 	 */
-	function getVsCodeApiScript(allowMultipleAPIAcquire, state) {
+	function getVsCodeApiScript(allowMultipleAPIAcquire, useParentPostMessage, state) {
 		const encodedState = state ? encodeURIComponent(state) : undefined;
-		return `
+		return /* js */`
 			globalThis.acquireVsCodeApi = (function() {
-				const originalPostMessage = window.parent.postMessage.bind(window.parent);
-				const targetOrigin = '*';
+				const originalPostMessage = window.parent['${useParentPostMessage ? 'postMessage' : vscodePostMessageFuncName}'].bind(window.parent);
+				const doPostMessage = (channel, data, transfer) => {
+					${useParentPostMessage
+				? `originalPostMessage({ command: channel, data: data }, '*', transfer);`
+				: `originalPostMessage(channel, data, transfer);`
+			}
+				};
+
 				let acquired = false;
 
 				let state = ${state ? `JSON.parse(decodeURIComponent("${encodedState}"))` : undefined};
@@ -160,12 +169,12 @@
 					}
 					acquired = true;
 					return Object.freeze({
-						postMessage: function(msg) {
-							return originalPostMessage({ command: 'onmessage', data: msg }, targetOrigin);
+						postMessage: function(message, transfer) {
+							doPostMessage('onmessage', { message, transfer }, transfer);
 						},
 						setState: function(newState) {
 							state = newState;
-							originalPostMessage({ command: 'do-update-state', data: JSON.stringify(newState) }, targetOrigin);
+							doPostMessage('do-update-state', JSON.stringify(newState));
 							return newState;
 						},
 						getState: function() {
@@ -187,12 +196,74 @@
 		// state
 		let firstLoad = true;
 		let loadTimeout;
+		/** @type {Array<{ readonly message: any, transfer?: ArrayBuffer[] }>} */
 		let pendingMessages = [];
 
 		const initData = {
 			initialScrollProgress: undefined,
 		};
 
+		function fatalError(/** @type {string} */ message) {
+			console.error(`Webview fatal error: ${message}`);
+			host.postMessage('fatal-error', { message });
+		}
+
+		/** @type {Promise<void>} */
+		const workerReady = new Promise(async (resolveWorkerReady) => {
+			// if (onElectron) {
+			// 	return resolveWorkerReady();
+			// }
+
+			if (!areServiceWorkersEnabled()) {
+				fatalError('Service Workers are not enabled in browser. Webviews will not work.');
+				return resolveWorkerReady();
+			}
+
+			const expectedWorkerVersion = 1;
+
+			navigator.serviceWorker.register(`service-worker.js${self.location.search}`).then(
+				async registration => {
+					await navigator.serviceWorker.ready;
+
+					const versionHandler = (event) => {
+						if (event.data.channel !== 'version') {
+							return;
+						}
+
+						navigator.serviceWorker.removeEventListener('message', versionHandler);
+						if (event.data.version === expectedWorkerVersion) {
+							return resolveWorkerReady();
+						} else {
+							// If we have the wrong version, try once to unregister and re-register
+							return registration.update()
+								.then(() => navigator.serviceWorker.ready)
+								.finally(resolveWorkerReady);
+						}
+					};
+					navigator.serviceWorker.addEventListener('message', versionHandler);
+					registration.active.postMessage({ channel: 'version' });
+				},
+				error => {
+					fatalError(`Could not register service workers: ${error}.`);
+					resolveWorkerReady();
+				});
+
+			const forwardFromHostToWorker = (channel) => {
+				host.onMessage(channel, (_event, data) => {
+					navigator.serviceWorker.ready.then(registration => {
+						registration.active.postMessage({ channel, data });
+					});
+				});
+			};
+			forwardFromHostToWorker('did-load-resource');
+			forwardFromHostToWorker('did-load-localhost');
+
+			navigator.serviceWorker.addEventListener('message', event => {
+				if (['load-resource', 'load-localhost'].includes(event.data.channel)) {
+					host.postMessage(event.data.channel, event.data);
+				}
+			});
+		});
 
 		/**
 		 * @param {HTMLDocument?} document
@@ -239,10 +310,11 @@
 				return;
 			}
 
-			let baseElement = event.view.document.getElementsByTagName('base')[0];
-			/** @type {any} */
-			let node = event.target;
-			while (node) {
+			const baseElement = event.view.document.getElementsByTagName('base')[0];
+
+			for (const pathElement of event.composedPath()) {
+				/** @type {any} */
+				const node = pathElement;
 				if (node.tagName && node.tagName.toLowerCase() === 'a' && node.href) {
 					if (node.getAttribute('href') === '#') {
 						event.view.scrollTo(0, 0);
@@ -255,9 +327,8 @@
 						host.postMessage('did-click-link', node.href.baseVal || node.href);
 					}
 					event.preventDefault();
-					break;
+					return;
 				}
-				node = node.parentNode;
 			}
 		};
 
@@ -272,13 +343,13 @@
 				}
 
 				if (event.button === 1) {
-					let node = /** @type {any} */ (event.target);
-					while (node) {
+					for (const pathElement of event.composedPath()) {
+						/** @type {any} */
+						const node = pathElement;
 						if (node.tagName && node.tagName.toLowerCase() === 'a' && node.href) {
 							event.preventDefault();
-							break;
+							return;
 						}
-						node = node.parentNode;
 					}
 				}
 			};
@@ -302,6 +373,21 @@
 			}
 
 			host.postMessage('did-keydown', {
+				key: e.key,
+				keyCode: e.keyCode,
+				code: e.code,
+				shiftKey: e.shiftKey,
+				altKey: e.altKey,
+				ctrlKey: e.ctrlKey,
+				metaKey: e.metaKey,
+				repeat: e.repeat
+			});
+		};
+		/**
+		 * @param {KeyboardEvent} e
+		 */
+		const handleInnerUp = (e) => {
+			host.postMessage('did-keyup', {
 				key: e.key,
 				keyCode: e.keyCode,
 				code: e.code,
@@ -391,7 +477,7 @@
 			if (options.allowScripts) {
 				const defaultScript = newDocument.createElement('script');
 				defaultScript.id = '_vscodeApiScript';
-				defaultScript.textContent = getVsCodeApiScript(options.allowMultipleAPIAcquire, data.state);
+				defaultScript.textContent = getVsCodeApiScript(options.allowMultipleAPIAcquire, host.useParentPostMessage, data.state);
 				newDocument.head.prepend(defaultScript);
 			}
 
@@ -446,6 +532,8 @@
 			host.onMessage('focus', () => {
 				const activeFrame = getActiveFrame();
 				if (!activeFrame || !activeFrame.contentWindow) {
+					// Focus the top level webview instead
+					window.focus();
 					return;
 				}
 
@@ -462,7 +550,7 @@
 			let updateId = 0;
 			host.onMessage('content', async (_event, data) => {
 				const currentUpdateId = ++updateId;
-				await host.ready;
+				await workerReady;
 				if (currentUpdateId !== updateId) {
 					return;
 				}
@@ -506,20 +594,15 @@
 				newFrame.setAttribute('id', 'pending-frame');
 				newFrame.setAttribute('frameborder', '0');
 				newFrame.setAttribute('sandbox', options.allowScripts ? 'allow-scripts allow-forms allow-same-origin allow-pointer-lock allow-downloads' : 'allow-same-origin allow-pointer-lock');
-				if (host.fakeLoad) {
-					// We should just be able to use srcdoc, but I wasn't
-					// seeing the service worker applying properly.
-					// Fake load an empty on the correct origin and then write real html
-					// into it to get around this.
-					newFrame.src = `./fake.html?id=${ID}`;
-				}
+				newFrame.setAttribute('allow', options.allowScripts ? 'clipboard-read; clipboard-write;' : '');
+				// We should just be able to use srcdoc, but I wasn't
+				// seeing the service worker applying properly.
+				// Fake load an empty on the correct origin and then write real html
+				// into it to get around this.
+				newFrame.src = `./fake.html?id=${ID}`;
+
 				newFrame.style.cssText = 'display: block; margin: 0; overflow: hidden; position: absolute; width: 100%; height: 100%; visibility: hidden';
 				document.body.appendChild(newFrame);
-
-				if (!host.fakeLoad) {
-					// write new content onto iframe
-					newFrame.contentDocument.open();
-				}
 
 				/**
 				 * @param {Document} contentDocument
@@ -527,19 +610,18 @@
 				function onFrameLoaded(contentDocument) {
 					// Workaround for https://bugs.chromium.org/p/chromium/issues/detail?id=978325
 					setTimeout(() => {
-						if (host.fakeLoad) {
-							contentDocument.open();
-							contentDocument.write(newDocument);
-							contentDocument.close();
-							hookupOnLoadHandlers(newFrame);
-						}
+						contentDocument.open();
+						contentDocument.write(newDocument);
+						contentDocument.close();
+						hookupOnLoadHandlers(newFrame);
+
 						if (contentDocument) {
 							applyStyles(contentDocument, contentDocument.body);
 						}
 					}, 0);
 				}
 
-				if (host.fakeLoad && !options.allowScripts && isSafari) {
+				if (!options.allowScripts && isSafari) {
 					// On Safari for iframes with scripts disabled, the `DOMContentLoaded` never seems to be fired.
 					// Use polling instead.
 					const interval = setInterval(() => {
@@ -589,8 +671,12 @@
 						contentWindow.addEventListener('scroll', handleInnerScroll);
 						contentWindow.addEventListener('wheel', handleWheel);
 
-						pendingMessages.forEach((data) => {
-							contentWindow.postMessage(data, '*');
+						if (document.hasFocus()) {
+							contentWindow.focus();
+						}
+
+						pendingMessages.forEach((message) => {
+							contentWindow.postMessage(message.message, '*', message.transfer);
 						});
 						pendingMessages = [];
 					}
@@ -624,6 +710,7 @@
 					newFrame.contentWindow.addEventListener('click', handleInnerClick);
 					newFrame.contentWindow.addEventListener('auxclick', handleAuxClick);
 					newFrame.contentWindow.addEventListener('keydown', handleInnerKeydown);
+					newFrame.contentWindow.addEventListener('keyup', handleInnerUp);
 					newFrame.contentWindow.addEventListener('contextmenu', e => e.preventDefault());
 
 					if (host.onIframeLoaded) {
@@ -631,25 +718,16 @@
 					}
 				}
 
-				if (!host.fakeLoad) {
-					hookupOnLoadHandlers(newFrame);
-				}
-
-				if (!host.fakeLoad) {
-					newFrame.contentDocument.write(newDocument);
-					newFrame.contentDocument.close();
-				}
-
 				host.postMessage('did-set-content', undefined);
 			});
 
 			// Forward message to the embedded iframe
-			host.onMessage('message', (_event, data) => {
+			host.onMessage('message', (_event, /** @type {{message: any, transfer?: ArrayBuffer[] }} */ data) => {
 				const pending = getPendingFrame();
 				if (!pending) {
 					const target = getActiveFrame();
 					if (target) {
-						target.contentWindow.postMessage(data, '*');
+						target.contentWindow.postMessage(data.message, '*', data.transfer);
 						return;
 					}
 				}
@@ -673,9 +751,26 @@
 				onBlur: () => host.postMessage('did-blur')
 			});
 
+			(/** @type {any} */ (window))[vscodePostMessageFuncName] = (command, data, transfer) => {
+				switch (command) {
+					case 'onmessage':
+					case 'do-update-state':
+						host.postMessage(command, data);
+						break;
+				}
+			};
+
 			// signal ready
 			host.postMessage('webview-ready', {});
 		});
+	}
+
+	function areServiceWorkersEnabled() {
+		try {
+			return !!navigator.serviceWorker;
+		} catch (e) {
+			return false;
+		}
 	}
 
 	if (typeof module !== 'undefined') {

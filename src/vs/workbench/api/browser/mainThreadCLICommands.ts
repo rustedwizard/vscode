@@ -15,21 +15,19 @@ import { getExtensionId } from 'vs/platform/extensionManagement/common/extension
 import { IInstantiationService, ServicesAccessor } from 'vs/platform/instantiation/common/instantiation';
 import { ServiceCollection } from 'vs/platform/instantiation/common/serviceCollection';
 import { ILabelService } from 'vs/platform/label/common/label';
-import { ILocalizationsService } from 'vs/platform/localizations/common/localizations';
 import { IOpenerService } from 'vs/platform/opener/common/opener';
 import { IProductService } from 'vs/platform/product/common/productService';
 import { IWorkbenchEnvironmentService } from 'vs/workbench/services/environment/common/environmentService';
 import { IExtensionManagementServerService } from 'vs/workbench/services/extensionManagement/common/extensionManagement';
-import { canExecuteOnWorkspace } from 'vs/workbench/services/extensions/common/extensionsUtil';
+import { ExtensionKindController } from 'vs/workbench/services/extensions/common/extensionsUtil';
 import { IExtensionManifest } from 'vs/workbench/workbench.web.api';
 
 
 // this class contains the commands that the CLI server is reying on
 
-CommandsRegistry.registerCommand('_remoteCLI.openExternal', function (accessor: ServicesAccessor, uri: UriComponents, options: { allowTunneling?: boolean }) {
-	// TODO: discuss martin, ben where to put this
+CommandsRegistry.registerCommand('_remoteCLI.openExternal', function (accessor: ServicesAccessor, uri: UriComponents | string) {
 	const openerService = accessor.get(IOpenerService);
-	openerService.open(URI.revive(uri), { openExternal: true, allowTunneling: options?.allowTunneling === true });
+	openerService.open(isString(uri) ? uri : URI.revive(uri), { openExternal: true, allowTunneling: true });
 });
 
 interface ManageExtensionsArgs {
@@ -79,28 +77,31 @@ class RemoteExtensionCLIManagementService extends ExtensionManagementCLIService 
 
 	private _location: string | undefined;
 
+	private readonly _extensionKindController: ExtensionKindController;
+
 	constructor(
 		@IExtensionManagementService extensionManagementService: IExtensionManagementService,
-		@IProductService private readonly productService: IProductService,
-		@IConfigurationService private readonly configurationService: IConfigurationService,
+		@IProductService productService: IProductService,
+		@IConfigurationService configurationService: IConfigurationService,
 		@IExtensionGalleryService extensionGalleryService: IExtensionGalleryService,
-		@ILocalizationsService localizationsService: ILocalizationsService,
 		@ILabelService labelService: ILabelService,
 		@IWorkbenchEnvironmentService envService: IWorkbenchEnvironmentService
 	) {
-		super(extensionManagementService, extensionGalleryService, localizationsService);
+		super(extensionManagementService, extensionGalleryService);
 
 		const remoteAuthority = envService.remoteAuthority;
 		this._location = remoteAuthority ? labelService.getHostLabel(Schemas.vscodeRemote, remoteAuthority) : undefined;
+
+		this._extensionKindController = new ExtensionKindController(productService, configurationService);
 	}
 
-	protected get location(): string | undefined {
+	protected override get location(): string | undefined {
 		return this._location;
 	}
 
-	protected validateExtensionKind(manifest: IExtensionManifest, output: CLIOutput): boolean {
-		if (!canExecuteOnWorkspace(manifest, this.productService, this.configurationService)) {
-			output.log(localize('cannot be installed', "Cannot install '{0}' because this extension has defined that it cannot run on the remote server.", getExtensionId(manifest.publisher, manifest.name)));
+	protected override validateExtensionKind(manifest: IExtensionManifest, output: CLIOutput): boolean {
+		if (!this._extensionKindController.canExecuteOnWorkspace(manifest)) {
+			output.log(localize('cannot be installed', "Cannot install the '{0}' extension because it is declared to not run in this setup.", getExtensionId(manifest.publisher, manifest.name)));
 			return false;
 		}
 		return true;

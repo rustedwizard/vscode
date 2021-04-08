@@ -65,6 +65,7 @@ export class CellEditorStatusBar extends Disposable {
 	) {
 		super();
 		this.statusBarContainer = DOM.append(container, $('.cell-statusbar-container'));
+		this.statusBarContainer.tabIndex = -1;
 		const leftItemsContainer = DOM.append(this.statusBarContainer, $('.cell-status-left'));
 		const rightItemsContainer = DOM.append(this.statusBarContainer, $('.cell-status-right'));
 		this.cellRunStatusContainer = DOM.append(leftItemsContainer, $('.cell-run-status'));
@@ -331,7 +332,7 @@ export class BrowserResizeObserver extends Disposable implements IResizeObserver
 		this.observer.unobserve(this.referenceDomElement!);
 	}
 
-	dispose(): void {
+	override dispose(): void {
 		this.observer.disconnect();
 		super.dispose();
 	}

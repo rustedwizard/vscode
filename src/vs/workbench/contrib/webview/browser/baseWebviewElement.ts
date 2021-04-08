@@ -4,17 +4,25 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { IMouseWheelEvent } from 'vs/base/browser/mouseEvent';
+import { streamToBuffer } from 'vs/base/common/buffer';
+import { CancellationToken } from 'vs/base/common/cancellation';
 import { Emitter } from 'vs/base/common/event';
 import { Disposable, IDisposable } from 'vs/base/common/lifecycle';
+import { Schemas } from 'vs/base/common/network';
 import { URI } from 'vs/base/common/uri';
 import { localize } from 'vs/nls';
 import { ExtensionIdentifier } from 'vs/platform/extensions/common/extensions';
+import { IFileService } from 'vs/platform/files/common/files';
 import { ILogService } from 'vs/platform/log/common/log';
 import { INotificationService } from 'vs/platform/notification/common/notification';
+import { IRemoteAuthorityResolverService } from 'vs/platform/remote/common/remoteAuthorityResolver';
+import { ITunnelService } from 'vs/platform/remote/common/tunnel';
+import { IRequestService } from 'vs/platform/request/common/request';
 import { ITelemetryService } from 'vs/platform/telemetry/common/telemetry';
+import { loadLocalResource, readFileStream, WebviewResourceResponse } from 'vs/platform/webview/common/resourceLoader';
+import { WebviewPortMappingManager } from 'vs/platform/webview/common/webviewPortMapping';
 import { WebviewThemeDataProvider } from 'vs/workbench/contrib/webview/browser/themeing';
-import { WebviewContentOptions, WebviewExtensionDescription, WebviewOptions } from 'vs/workbench/contrib/webview/browser/webview';
-import { areWebviewInputOptionsEqual } from 'vs/workbench/contrib/webviewPanel/browser/webviewWorkbenchService';
+import { areWebviewContentOptionsEqual, WebviewContentOptions, WebviewExtensionDescription, WebviewMessageReceivedEvent, WebviewOptions } from 'vs/workbench/contrib/webview/browser/webview';
 import { IWorkbenchEnvironmentService } from 'vs/workbench/services/environment/common/environmentService';
 
 export const enum WebviewMessageChannels {
@@ -79,24 +87,54 @@ export abstract class BaseWebview<T extends HTMLElement> extends Disposable {
 
 	protected content: WebviewContent;
 
+	private readonly _portMappingManager: WebviewPortMappingManager;
+
+	private readonly _fileService: IFileService;
+	private readonly _logService: ILogService;
+	private readonly _remoteAuthorityResolverService: IRemoteAuthorityResolverService;
+	private readonly _requestService: IRequestService;
+	private readonly _telemetryService: ITelemetryService;
+	private readonly _tunnelService: ITunnelService;
+	protected readonly _environmentService: IWorkbenchEnvironmentService;
+
 	constructor(
 		public readonly id: string,
-		options: WebviewOptions,
+		private readonly options: WebviewOptions,
 		contentOptions: WebviewContentOptions,
 		public extension: WebviewExtensionDescription | undefined,
 		private readonly webviewThemeDataProvider: WebviewThemeDataProvider,
-		@INotificationService notificationService: INotificationService,
-		@ILogService private readonly _logService: ILogService,
-		@ITelemetryService private readonly _telemetryService: ITelemetryService,
-		@IWorkbenchEnvironmentService protected readonly environmentService: IWorkbenchEnvironmentService
+		services: {
+			environmentService: IWorkbenchEnvironmentService,
+			fileService: IFileService,
+			logService: ILogService,
+			notificationService: INotificationService,
+			remoteAuthorityResolverService: IRemoteAuthorityResolverService,
+			requestService: IRequestService,
+			telemetryService: ITelemetryService,
+			tunnelService: ITunnelService,
+		}
 	) {
 		super();
+
+		this._environmentService = services.environmentService;
+		this._fileService = services.fileService;
+		this._logService = services.logService;
+		this._remoteAuthorityResolverService = services.remoteAuthorityResolverService;
+		this._requestService = services.requestService;
+		this._telemetryService = services.telemetryService;
+		this._tunnelService = services.tunnelService;
 
 		this.content = {
 			html: '',
 			options: contentOptions,
 			state: undefined
 		};
+
+		this._portMappingManager = this._register(new WebviewPortMappingManager(
+			() => this.extension?.location,
+			() => this.content.options.portMapping || [],
+			this._tunnelService
+		));
 
 		this._element = this.createElement(options, contentOptions);
 
@@ -121,8 +159,11 @@ export abstract class BaseWebview<T extends HTMLElement> extends Disposable {
 			this._onDidClickLink.fire(uri);
 		}));
 
-		this._register(this.on(WebviewMessageChannels.onmessage, (data: any) => {
-			this._onMessage.fire(data);
+		this._register(this.on(WebviewMessageChannels.onmessage, (data: { message: any, transfer?: ArrayBuffer[] }) => {
+			this._onMessage.fire({
+				message: data.message,
+				transfer: data.transfer,
+			});
 		}));
 
 		this._register(this.on(WebviewMessageChannels.didScroll, (scrollYPercentage: number) => {
@@ -151,21 +192,36 @@ export abstract class BaseWebview<T extends HTMLElement> extends Disposable {
 		}));
 
 		this._register(this.on<{ message: string }>(WebviewMessageChannels.fatalError, (e) => {
-			notificationService.error(localize('fatalErrorMessage', "Error loading webview: {0}", e.message));
+			services.notificationService.error(localize('fatalErrorMessage', "Error loading webview: {0}", e.message));
 		}));
 
 		this._register(this.on('did-keydown', (data: KeyboardEvent) => {
 			// Electron: workaround for https://github.com/electron/electron/issues/14258
 			// We have to detect keyboard events in the <webview> and dispatch them to our
 			// keybinding service because these events do not bubble to the parent window anymore.
-			this.handleKeyDown(data);
+			this.handleKeyEvent('keydown', data);
+		}));
+
+		this._register(this.on('did-keyup', (data: KeyboardEvent) => {
+			this.handleKeyEvent('keyup', data);
+		}));
+
+		this._register(this.on(WebviewMessageChannels.loadResource, (entry: any) => {
+			const rawPath = entry.path;
+			const normalizedPath = decodeURIComponent(rawPath);
+			const uri = URI.parse(normalizedPath.replace(/^\/([\w\-]+)\/(.+)$/, (_, scheme, path) => scheme + ':/' + path));
+			this.loadResource(entry.id, rawPath, uri, entry.ifNoneMatch);
+		}));
+
+		this._register(this.on(WebviewMessageChannels.loadLocalhost, (entry: any) => {
+			this.localLocalhost(entry.id, entry.origin);
 		}));
 
 		this.style();
 		this._register(webviewThemeDataProvider.onThemeDataChanged(this.style, this));
 	}
 
-	dispose(): void {
+	override dispose(): void {
 		if (this.element) {
 			this.element.remove();
 		}
@@ -185,7 +241,7 @@ export abstract class BaseWebview<T extends HTMLElement> extends Disposable {
 	private readonly _onDidReload = this._register(new Emitter<void>());
 	public readonly onDidReload = this._onDidReload.event;
 
-	private readonly _onMessage = this._register(new Emitter<any>());
+	private readonly _onMessage = this._register(new Emitter<WebviewMessageReceivedEvent>());
 	public readonly onMessage = this._onMessage.event;
 
 	private readonly _onDidScroll = this._register(new Emitter<{ readonly scrollYPercentage: number; }>());
@@ -206,8 +262,8 @@ export abstract class BaseWebview<T extends HTMLElement> extends Disposable {
 	private readonly _onDidDispose = this._register(new Emitter<void>());
 	public readonly onDidDispose = this._onDidDispose.event;
 
-	public postMessage(data: any): void {
-		this._send('message', data);
+	public postMessage(message: any, transfer?: ArrayBuffer[]): void {
+		this._send('message', { message, transfer });
 	}
 
 	protected _send(channel: string, data?: any): void {
@@ -234,7 +290,7 @@ export abstract class BaseWebview<T extends HTMLElement> extends Disposable {
 		this._hasAlertedAboutMissingCsp = true;
 
 		if (this.extension && this.extension.id) {
-			if (this.environmentService.isExtensionDevelopment) {
+			if (this._environmentService.isExtensionDevelopment) {
 				this._onMissingCsp.fire(this.extension.id);
 			}
 
@@ -271,7 +327,7 @@ export abstract class BaseWebview<T extends HTMLElement> extends Disposable {
 	public set contentOptions(options: WebviewContentOptions) {
 		this._logService.debug(`Webview(${this.id}): will update content options`);
 
-		if (areWebviewInputOptionsEqual(options, this.content.options)) {
+		if (areWebviewContentOptionsEqual(options, this.content.options)) {
 			this._logService.debug(`Webview(${this.id}): skipping content options update`);
 			return;
 		}
@@ -313,7 +369,11 @@ export abstract class BaseWebview<T extends HTMLElement> extends Disposable {
 	}
 
 	protected style(): void {
-		const { styles, activeTheme, themeLabel } = this.webviewThemeDataProvider.getWebviewThemeData();
+		let { styles, activeTheme, themeLabel } = this.webviewThemeDataProvider.getWebviewThemeData();
+		if (this.options.transformCssVariables) {
+			styles = this.options.transformCssVariables(styles);
+		}
+
 		this._send('styles', { styles, activeTheme, themeName: themeLabel });
 	}
 
@@ -326,9 +386,9 @@ export abstract class BaseWebview<T extends HTMLElement> extends Disposable {
 		}
 	}
 
-	private handleKeyDown(event: IKeydownEvent) {
+	private handleKeyEvent(type: 'keydown' | 'keyup', event: IKeydownEvent) {
 		// Create a fake KeyboardEvent from the data provided
-		const emulatedKeyboardEvent = new KeyboardEvent('keydown', event);
+		const emulatedKeyboardEvent = new KeyboardEvent(type, event);
 		// Force override the target
 		Object.defineProperty(emulatedKeyboardEvent, 'target', {
 			get: () => this.element,
@@ -380,5 +440,91 @@ export abstract class BaseWebview<T extends HTMLElement> extends Disposable {
 		if (this.element) {
 			this._send('execCommand', command);
 		}
+	}
+
+	private async loadResource(id: number, requestPath: string, uri: URI, ifNoneMatch: string | undefined) {
+		try {
+			const remoteAuthority = this._environmentService.remoteAuthority;
+			const remoteConnectionData = remoteAuthority ? this._remoteAuthorityResolverService.getConnectionData(remoteAuthority) : null;
+			const extensionLocation = this.extension?.location;
+
+			// If we are loading a file resource from a remote extension, rewrite the uri to go remote
+			let rewriteUri: undefined | ((uri: URI) => URI);
+			if (extensionLocation?.scheme === Schemas.vscodeRemote) {
+				rewriteUri = (uri) => {
+					if (uri.scheme === Schemas.file && extensionLocation?.scheme === Schemas.vscodeRemote) {
+						return URI.from({
+							scheme: Schemas.vscodeRemote,
+							authority: extensionLocation.authority,
+							path: '/vscode-resource',
+							query: JSON.stringify({
+								requestResourcePath: uri.path
+							})
+						});
+					}
+					return uri;
+				};
+			}
+
+			const result = await loadLocalResource(uri, ifNoneMatch, {
+				extensionLocation: extensionLocation,
+				roots: this.content.options.localResourceRoots || [],
+				remoteConnectionData,
+				rewriteUri,
+			}, {
+				readFileStream: (resource, etag) => readFileStream(this._fileService, resource, etag),
+			}, this._requestService, this._logService, CancellationToken.None);
+
+			switch (result.type) {
+				case WebviewResourceResponse.Type.Success:
+					{
+						const { buffer } = await streamToBuffer(result.stream);
+						return this._send('did-load-resource', {
+							id,
+							status: 200,
+							path: requestPath,
+							mime: result.mimeType,
+							data: buffer,
+							etag: result.etag,
+						});
+					}
+				case WebviewResourceResponse.Type.NotModified:
+					{
+						return this._send('did-load-resource', {
+							id,
+							status: 304, // not modified
+							path: requestPath,
+							mime: result.mimeType,
+						});
+					}
+				case WebviewResourceResponse.Type.AccessDenied:
+					{
+						return this._send('did-load-resource', {
+							id,
+							status: 401, // unauthorized
+							path: requestPath,
+						});
+					}
+			}
+		} catch {
+			// noop
+		}
+
+		return this._send('did-load-resource', {
+			id,
+			status: 404,
+			path: requestPath
+		});
+	}
+
+	private async localLocalhost(id: string, origin: string) {
+		const authority = this._environmentService.remoteAuthority;
+		const resolveAuthority = authority ? await this._remoteAuthorityResolverService.resolveAuthority(authority) : undefined;
+		const redirect = resolveAuthority ? await this._portMappingManager.getRedirect(resolveAuthority.authority, origin) : undefined;
+		return this._send('did-load-localhost', {
+			id,
+			origin,
+			location: redirect
+		});
 	}
 }

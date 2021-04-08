@@ -17,7 +17,6 @@ import { IStorageService } from 'vs/platform/storage/common/storage';
 import { ITelemetryService } from 'vs/platform/telemetry/common/telemetry';
 import { IThemeService } from 'vs/platform/theme/common/themeService';
 import { IWorkspaceContextService } from 'vs/platform/workspace/common/workspace';
-import { ViewPaneContainer } from 'vs/workbench/browser/parts/views/viewPaneContainer';
 import { IExtensionService } from 'vs/workbench/services/extensions/common/extensions';
 
 export abstract class Panel extends PaneComposite implements IPanel {
@@ -25,7 +24,6 @@ export abstract class Panel extends PaneComposite implements IPanel {
 	private readonly panelActions: CompositeMenuActions;
 
 	constructor(id: string,
-		viewPaneContainer: ViewPaneContainer,
 		@ITelemetryService telemetryService: ITelemetryService,
 		@IStorageService storageService: IStorageService,
 		@IInstantiationService instantiationService: IInstantiationService,
@@ -34,20 +32,20 @@ export abstract class Panel extends PaneComposite implements IPanel {
 		@IExtensionService extensionService: IExtensionService,
 		@IWorkspaceContextService contextService: IWorkspaceContextService,
 	) {
-		super(id, viewPaneContainer, telemetryService, storageService, instantiationService, themeService, contextMenuService, extensionService, contextService);
+		super(id, telemetryService, storageService, instantiationService, themeService, contextMenuService, extensionService, contextService);
 		this.panelActions = this._register(this.instantiationService.createInstance(CompositeMenuActions, MenuId.PanelTitle, undefined, undefined));
 		this._register(this.panelActions.onDidChange(() => this.updateTitleArea()));
 	}
 
-	getActions(): ReadonlyArray<IAction> {
+	override getActions(): ReadonlyArray<IAction> {
 		return [...super.getActions(), ...this.panelActions.getPrimaryActions()];
 	}
 
-	getSecondaryActions(): ReadonlyArray<IAction> {
+	override getSecondaryActions(): ReadonlyArray<IAction> {
 		return this.mergeSecondaryActions(super.getSecondaryActions(), this.panelActions.getSecondaryActions());
 	}
 
-	getContextMenuActions(): ReadonlyArray<IAction> {
+	override getContextMenuActions(): ReadonlyArray<IAction> {
 		return this.mergeSecondaryActions(super.getContextMenuActions(), this.panelActions.getContextMenuActions());
 	}
 
